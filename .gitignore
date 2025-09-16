@@ -1,0 +1,17 @@
+﻿# dependencies
+node_modules/
+.pnpm-store/
+**/.local-chromium/
+**/chrome-win/
+**/Chromium.app/
+# builds
+dist/
+build/
+# env / local
+.env
+.env.*
+*.local
+# OS/IDE
+.DS_Store
+Thumbs.db
+.vscode/

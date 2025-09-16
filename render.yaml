@@ -1,0 +1,31 @@
+# Render manifest to deploy frontend (static site) and whatsapp-bot (web service)
+# Edit branch names and values to match your repo before connecting on Render.
+
+staticSites:
+  - type: static_site
+    name: crm-frontend
+    env: node
+    branch: main
+    buildCommand: "npm ci && npm run build"
+    publishPath: "dist"
+
+services:
+  - type: web
+    name: crm-whatsapp-bot
+    env: node
+    branch: main
+    plan: free
+    # We'll install dependencies and run the bot directly from the repo.
+    buildCommand: "npm ci"
+    startCommand: "node scripts/whatsapp-bot.js"
+    disk:
+      mountPath: "/app/.local-auth"
+      sizeGb: 1
+    # Do NOT put real secrets here. Set them in the Render dashboard after creating the service.
+    envVars:
+      - key: BOT_API_KEY
+        value: ""
+      - key: PORT
+        value: "3001"
+      - key: WHATSAPP_PHONE_ID
+        value: ""

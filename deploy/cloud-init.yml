@@ -1,0 +1,36 @@
+#cloud-config
+# Generic cloud-init for Ubuntu 22.04 / 24.04 to run the whatsapp-web.js Docker compose service
+# Replace <REPO_URL> and <BOT_API_KEY> before using, or use the generator script deploy/generate-cloud-init.sh
+
+packages:
+  - git
+  - curl
+  - apt-transport-https
+  - ca-certificates
+  - gnupg
+  - lsb-release
+
+runcmd:
+  - [ bash, -lc, 'set -e
+    echo ">>> Updating apt";
+    apt-get update -y;
+    echo ">>> Installing docker";
+    apt-get install -y docker.io docker-compose
+    echo ">>> Enabling docker";
+    systemctl enable --now docker
+    mkdir -p /opt/crm
+    cd /opt/crm
+    if [ "<REPO_URL>" = "<REPO_URL>" ]; then
+      echo "ERROR: replace <REPO_URL> in this file with your git repository URL" >&2; exit 1
+    fi
+    echo ">>> Cloning repo";
+    git clone --depth 1 "<REPO_URL>" . || (echo "git clone failed" >&2; exit 1)
+    mkdir -p /opt/crm/whatsapp-data
+    chown -R ubuntu:ubuntu /opt/crm/whatsapp-data || true
+    echo "BOT_API_KEY=<BOT_API_KEY>" > /opt/crm/.env
+    echo ">>> Starting docker compose";
+    docker compose -f ./docker/docker-compose.whatsapp.yml up --build -d
+    echo "Deployment finished. Tail logs with: docker compose -f ./docker/docker-compose.whatsapp.yml logs -f whatsapp-bot"
+    ' ]
+
+final_message: "The whatsapp-bot cloud-init script has finished. Check the instance console/logs to find the QR in the container logs."

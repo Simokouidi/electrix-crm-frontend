@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  whatsapp-bot:
+    build:
+      context: ..
+      dockerfile: ./docker/whatsapp-bot.Dockerfile
+    container_name: crm-whatsapp-bot
+    restart: unless-stopped
+    environment:
+      - PORT=3002
+      - BOT_API_KEY=${BOT_API_KEY}
+    volumes:
+      - ./whatsapp-data:/app/.local-auth
+    ports:
+      - "3002:3002"

@@ -1,0 +1,25 @@
+[0908/194140.243:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0908/194143.891:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Feature xr-spatial-tracking's parameters are ignored.", source:  (0)
+[0908/194143.891:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Origin trial controlled feature not enabled: 'attribution-reporting'.", source:  (0)
+[0908/194143.891:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Unrecognized feature: 'compute-pressure'.", source:  (0)
+[0908/194143.892:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Origin trial controlled feature not enabled: 'interest-cohort'.", source:  (0)
+[0908/194143.893:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Unrecognized feature: 'private-state-token-issuance'.", source:  (0)
+[0908/194143.893:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Origin trial controlled feature not enabled: 'shared-storage'.", source:  (0)
+[0908/194143.893:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Unrecognized feature: 'shared-storage-select-url'.", source:  (0)
+[0908/194143.893:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Unrecognized feature: 'private-state-token-redemption'.", source:  (0)
+[0908/194143.893:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Unrecognized feature: 'unload'.", source:  (0)
+[0908/194143.893:INFO:CONSOLE(0)] "Error with Permissions-Policy header: Unrecognized feature: 'window-management'.", source:  (0)
+[0908/194143.894:INFO:CONSOLE(0)] "Document-Policy HTTP header: Unrecognized document policy feature name include-js-call-stacks-in-crash-reports.", source: https://web.whatsapp.com/ (0)
+[0908/194146.077:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0908/194619.826:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0908/194850.492:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0908/230116.221:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0909/020120.906:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.
+[0909/020123.381:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0909/020125.925:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.
+[0909/050124.957:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.
+[0909/050125.123:INFO:CONSOLE(115)] "Event handler of 'x-storagemutated-1' event must be added on the initial evaluation of worker script.", source: https://static.whatsapp.net/rsrc.php/v4/yJ/r/cCqir2t3AAf.js (115)
+[0909/050127.121:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.
+[0909/080134.703:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.
+[0909/080134.878:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.
+[0909/080135.015:WARNING:dns_config_service_win.cc(584)] Failed to read DnsConfig.

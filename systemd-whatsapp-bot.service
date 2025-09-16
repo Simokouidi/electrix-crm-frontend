@@ -1,0 +1,16 @@
+[Unit]
+Description=CRM WhatsApp Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/crm
+Environment=NODE_ENV=production
+Environment=BOT_API_KEY=replace-with-secret
+ExecStart=/usr/bin/node /opt/crm/scripts/whatsapp-bot.js
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

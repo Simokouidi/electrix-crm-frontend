@@ -1,0 +1,13 @@
+2025/09/08-19:41:40.275 11e4 Reusing MANIFEST C:\Users\HP\OneDrive - ELECTRIX\Desktop\CRM\.wwebjs_auth\session-crm-bot\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/MANIFEST-000001
+2025/09/08-19:41:40.276 11e4 Recovering log #16
+2025/09/08-19:41:40.379 11e4 Reusing old log C:\Users\HP\OneDrive - ELECTRIX\Desktop\CRM\.wwebjs_auth\session-crm-bot\Default\IndexedDB\https_web.whatsapp.com_0.indexeddb.leveldb/000016.log 
+2025/09/08-19:41:45.728 11e4 Manual compaction at level-0 from '\x00\x1e\x00\x00\x00' @ 72057594037927935 : 1 .. '\x00\x1f\x00\x00\x00' @ 0 : 0; will stop at (end)
+2025/09/08-20:39:43.220 4470 Level-0 table #22: started
+2025/09/08-20:39:43.299 4470 Level-0 table #22: 1125806 bytes OK
+2025/09/08-20:39:43.302 4470 Delete type=0 #16
+2025/09/08-20:39:43.737 beac Compacting 1@1 + 1@2 files
+2025/09/08-20:39:43.834 beac Generated table #23@1: 33033 keys, 1224685 bytes
+2025/09/08-20:39:43.834 beac Compacted 1@1 + 1@2 files => 1224685 bytes
+2025/09/08-20:39:43.835 beac compacted to: files[ 0 0 1 0 0 0 0 ]
+2025/09/08-20:39:43.836 beac Delete type=2 #19
+2025/09/08-20:39:43.836 beac Delete type=2 #22
