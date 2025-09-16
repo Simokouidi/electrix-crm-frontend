@@ -2,6 +2,6 @@
 /dist
 /.git
 /.local-auth
-npm-debug.log
+# keep Dockerfile in the build context
 Dockerfile
 docker-compose*.yml
