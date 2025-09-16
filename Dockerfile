@@ -6,9 +6,9 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:stable-alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-RUN rm /etc/nginx/conf.d/default.conf
-COPY docker/nginx-spa.conf /etc/nginx/conf.d/default.conf
+FROM node:18-alpine AS runtime
+WORKDIR /app
+COPY --from=build /app/dist ./dist
+# Ensure 'serve' is available; using npx at runtime works without adding to image dependencies.
 EXPOSE 80
-CMD ["/usr/sbin/nginx", "-g", "daemon off;"]
+CMD ["sh", "-c", "npx serve -s dist -l $PORT"]
