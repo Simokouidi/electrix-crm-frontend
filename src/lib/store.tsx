@@ -4,7 +4,7 @@ import { v4 as uuid } from 'uuid'
 export type TeamMember = { id: string; name: string; email?: string; avatarUrl?: string; role?: string; phone?: string; password?: string; managerId?: string }
 export type CompanySize = '1-50'|'51-200'|'201-1000'|'1001+'
 export type PipelineStage = 'Discovery'|'Qualifying'|'ProposalSent'|'Negotiation'|'Contracting'|'Live'
-export type Status = 'Planned'|'In Progress'|'Completed'|'Canceled'|'Postponed'
+export type Status = 'Planned'|'In Progress'|'Completed'|'Canceled'|'Postponed'|'Prospect'
 export type Health = 'Green'|'Amber'|'Red'
 
 export type Client = {

@@ -13,4 +13,5 @@ COPY --from=build /app/dist ./dist
 # Install serve globally in runtime image so the container can run without network access
 RUN npm install -g serve@14.1.2 --no-audit --no-fund
 EXPOSE 80
-CMD ["sh", "-c", "serve -s dist -l 0.0.0.0:$PORT"]
+# Use a fallback port (8080) if $PORT is empty; POSIX shell parameter expansion provides the default
+CMD ["sh", "-c", "serve -s dist -l 0.0.0.0:${PORT:-8080}"]

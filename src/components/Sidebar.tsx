@@ -3,7 +3,7 @@ import Logo from '../Images/Logo_copy2.png'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useStore } from '../lib/store'
 import { SETTINGS_TABS } from '../lib/settingsTabs'
-import type { LucideIcon } from 'lucide-react'
+// lucide-react exports vary between versions; use a loose 'any' for icon components to avoid type issues
 import {
   Briefcase,
   Users as UsersIcon,
@@ -43,7 +43,7 @@ export default function Sidebar(): JSX.Element {
   const onSettingsRoute =
     location.pathname === '/settings' || location.pathname.startsWith('/settings/')
 
-  const iconMap: Record<string, LucideIcon> = {
+  const iconMap: Record<string, any> = {
     Organization: Briefcase,
     'Users & Access': UsersIcon,
     Pipelines: Layers,
@@ -72,7 +72,7 @@ export default function Sidebar(): JSX.Element {
             <li key={l.to}>
               <NavLink
                 to={l.to}
-                className={({ isActive }) =>
+                className={({ isActive }: { isActive: boolean }) =>
                   `group flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium nav-link ` +
                   (isActive
                     ? 'bg-gradient-to-r from-accentFrom to-accentTo shadow-[0_8px_24px_rgba(99,102,241,0.12)]'
