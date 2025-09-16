@@ -2,7 +2,8 @@
 FROM node:18-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Use `npm install` in the Docker build to avoid `npm ci` failing if lockfile differs in remote
+RUN npm install --no-audit --no-fund
 COPY . .
 RUN npm run build
 
