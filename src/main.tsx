@@ -9,12 +9,20 @@ import logoUrl from './Images/Logo_copy2.png'
 
 // Ensure a favicon is present in the page head (works both in dev and after build)
 if (typeof document !== 'undefined') {
-  const existing = document.querySelector("link[rel*='icon']")
-  const link = existing || document.createElement('link')
-  link.type = 'image/png'
-  link.rel = 'icon'
-  link.href = logoUrl as unknown as string
-  if (!existing) document.getElementsByTagName('head')[0].appendChild(link)
+  // Query for an existing favicon link and cast it to HTMLLinkElement for TS
+  let link = document.querySelector("link[rel*='icon']") as HTMLLinkElement | null
+  if (!link) {
+    link = document.createElement('link') as HTMLLinkElement
+    link.type = 'image/png'
+    link.rel = 'icon'
+    link.href = logoUrl as unknown as string
+    document.head.appendChild(link)
+  } else {
+    // update existing
+    link.href = logoUrl as unknown as string
+    link.type = 'image/png'
+    link.rel = 'icon'
+  }
   document.title = 'ELECTRIX CRM'
 }
 
