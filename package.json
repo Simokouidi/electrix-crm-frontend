@@ -6,6 +6,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "start": "vite preview --port $PORT --host",
     "whatsapp-bot": "node ./scripts/whatsapp-bot.js"
   },
   "dependencies": {
