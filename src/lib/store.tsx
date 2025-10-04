@@ -490,6 +490,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
         }catch(e){ console.warn('Seed push attempt failed', e) }
       }catch(e){
           console.warn('API fetch failed, using seeded data', e)
+          // Minimal, robust fallback so the app remains usable offline or when backend is down
+          try{ setTeam(prev => prev.length ? prev : seedTeam) }catch{}
+          try{ setClients(prev => prev.length ? prev : seedClients) }catch{}
+          try{ setActivities(prev => prev.length ? prev : seedActivities) }catch{}
+          try{ setActivitiesSynced(true) }catch{}
         } finally {
           // Ensure UI can render (even if API failed) after the initial attempt
           try{ setDataSynced(true) }catch(_){}

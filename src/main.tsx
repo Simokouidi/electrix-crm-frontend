@@ -3,7 +3,7 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './styles.css'
 import { StoreProvider } from './lib/store'
-import loginBgUrl from './Images/Background.png'
+const loginBgUrl = new URL('./Images/Background.png', import.meta.url).href
 
 // Import the Electrix logo so Vite will resolve and copy it to the build output
 import logoUrl from './Images/Logo_copy2.png'
