@@ -16,6 +16,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      # Compute lowercased owner and repo name for GHCR (GHCR requires lowercase repo names)
+      - name: Compute image names (lowercase)
+        id: vars
+        shell: bash
+        run: |
+          echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          echo "REPO_LC=${REPO_NAME,,}" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
         with:
@@ -29,7 +38,7 @@ jobs:
           context: .
           file: docker/frontend.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ github.repository }}-frontend:latest
+          tags: ghcr.io/${{ steps.vars.outputs.OWNER_LC }}/${{ steps.vars.outputs.REPO_LC }}-frontend:latest
 
       - name: Build and push whatsapp-bot image
         uses: docker/build-push-action@v4
@@ -37,4 +46,4 @@ jobs:
           context: .
           file: docker/whatsapp-bot.Dockerfile
           push: true
-          tags: ghcr.io/${{ github.repository_owner }}/${{ github.repository }}-whatsapp-bot:latest
+          tags: ghcr.io/${{ steps.vars.outputs.OWNER_LC }}/${{ steps.vars.outputs.REPO_LC }}-whatsapp-bot:latest
