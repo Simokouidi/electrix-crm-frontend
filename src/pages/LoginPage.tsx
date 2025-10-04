@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useStore } from '../lib/store'
 import Logo from '../Images/Logo_copy2.png'
 import { User2, Lock, ArrowRight, Quote } from 'lucide-react'
-import BgImage from '../Images/Background.png'
+// Resolve background image via URL for robust Vite handling
+const BgImage = new URL('../Images/Background.png', import.meta.url).href
 
 export default function LoginPage(){
   const { login } = useStore()

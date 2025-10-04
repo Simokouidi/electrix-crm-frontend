@@ -25,8 +25,8 @@ app.get('/health', (req, res) => res.json({ ok: true }));
 app.use('/api/clients', clientsRouter(io));
 app.use('/api/activities', activitiesRouter(io));
 app.use('/api/users', usersRouter(io));
-  app.use('/api/auth', authRouter(io));
-  app.use('/api/db', dbRouter);
+app.use('/api/auth', authRouter(io));
+app.use('/api/db', dbRouter);
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 
@@ -72,8 +72,8 @@ async function start() {
   // Ensure admin user exists when DB is available
   if(pool){
     try{
-  const adminName = process.env.ADMIN_NAME || 'Admin'
-  const adminPassword = process.env.ADMIN_PASSWORD || 'Admin'
+      const adminName = process.env.ADMIN_NAME || 'Admin'
+      const adminPassword = process.env.ADMIN_PASSWORD || 'Admin'
       // Ensure `users` table exists with expected columns (id PK, name, email UNIQUE, role, password)
       try{
         await pool.query(`
@@ -136,3 +136,4 @@ start().catch(err => {
   console.error('Failed to start server', err);
   process.exit(1);
 });
+

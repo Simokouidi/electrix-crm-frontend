@@ -2,9 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../lib/store'
 import Button from '../components/Button'
 import Logo from '../Images/Logo_copy2.png'
-import KeyIcon from '../Images/key.svg'
-import EyeIcon from '../Images/eye.svg'
-import EyeOffIcon from '../Images/eye-off.svg'
+import { Eye, EyeOff, Key } from 'lucide-react'
 import { getAllowedSettingsTabs } from '../lib/settingsTabs'
 // Crypto-safe password generation
 function generateSecurePassword(len = 12){
@@ -806,7 +804,7 @@ export default function SettingsPage(){
                                 className="absolute right-10 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded border text-slate-600 hover:bg-gray-50"
                                 style={{lineHeight:0}}
                               >
-                                <img src={showInvitePassword ? EyeOffIcon : EyeIcon} alt={showInvitePassword ? 'Hide password' : 'Show password'} className="w-5 h-5 opacity-80 hover:opacity-100"/>
+                                {showInvitePassword ? <EyeOff size={18} className="opacity-80"/> : <Eye size={18} className="opacity-80"/>}
                               </button>
                               <button
                                 type="button"
@@ -815,7 +813,7 @@ export default function SettingsPage(){
                                 onClick={()=>setInviteData(d=>({...d, password: generateSecurePassword(12)}))}
                                 className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded hover:bg-gray-50"
                               >
-                                <img src={KeyIcon} alt="Generate secure password" className="w-5 h-5 opacity-80 hover:opacity-100"/>
+                                <Key size={18} className="opacity-80"/>
                               </button>
                             </div>
                             <div className="text-xs text-slate-400 mt-1">Use the key to generate; use the eye to show/hide.</div>
@@ -885,7 +883,7 @@ export default function SettingsPage(){
                                   onChange={(e)=>setEditData(d=>({...d, password: e.target.value}))}
                                   className="w-full rounded px-3 py-2 border border-gray-200 pr-20"
                                 />
-                                <button
+                                  <button
                                   type="button"
                                   title={showEditPassword ? 'Hide password' : 'Show password'}
                                   aria-label={showEditPassword ? 'Hide password' : 'Show password'}
@@ -893,7 +891,7 @@ export default function SettingsPage(){
                                   className="absolute right-10 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded border text-slate-600 hover:bg-gray-50"
                                   style={{lineHeight:0}}
                                 >
-                                  <img src={showEditPassword ? EyeOffIcon : EyeIcon} alt={showEditPassword ? 'Hide password' : 'Show password'} className="w-5 h-5 opacity-80 hover:opacity-100"/>
+                                  {showEditPassword ? <EyeOff size={18} className="opacity-80"/> : <Eye size={18} className="opacity-80"/>}
                                 </button>
                                 <button
                                   type="button"
@@ -902,7 +900,7 @@ export default function SettingsPage(){
                                   onClick={()=>setEditData(d=>({...d, password: generateSecurePassword(12)}))}
                                   className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 inline-flex items-center justify-center rounded hover:bg-gray-50"
                                 >
-                                  <img src={KeyIcon} alt="Generate secure password" className="w-5 h-5 opacity-80 hover:opacity-100"/>
+                                  <Key size={18} className="opacity-80"/>
                                 </button>
                               </div>
                               <div className="text-xs text-slate-400 mt-1">Use the key to generate; use the eye to show/hide.</div>
@@ -960,7 +958,7 @@ export default function SettingsPage(){
                             className="w-9 h-9 inline-flex items-center justify-center rounded border text-slate-600 hover:bg-gray-100 flex-shrink-0"
                             style={{lineHeight:0}}
                           >
-                            <img src={showCredPassword ? EyeOffIcon : EyeIcon} alt={showCredPassword ? 'Hide password' : 'Show password'} className="w-5 h-5 opacity-80 hover:opacity-100"/>
+                            {showCredPassword ? <EyeOff size={18} className="opacity-80"/> : <Eye size={18} className="opacity-80"/>}
                           </button>
                         </div>
                         <div className="mt-3 text-slate-600">Message:</div>

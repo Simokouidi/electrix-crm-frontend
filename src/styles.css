@@ -12,10 +12,7 @@ body{
   @apply bg-gray-50 text-slate-800 font-sans;
 }
 
-/* Global scale: render the entire app at ~80% size without changing app logic */
-body {
-  zoom: 0.8; /* Supported in Chromium/Edge */
-}
+/* Global scale: apply only to Shell content so login stays 100% */
 
 /* Fallback for browsers not supporting zoom (e.g., Safari) */
 @supports not (zoom: 1) {
@@ -31,6 +28,7 @@ body {
 
 .app-shell{
   @apply min-h-screen flex;
+  zoom: 0.8; /* Supported in Chromium/Edge */
 }
 
 .sidebar{

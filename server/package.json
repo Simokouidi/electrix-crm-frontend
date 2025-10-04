@@ -2,12 +2,12 @@
   "name": "electrix-crm-server",
   "version": "0.1.0",
   "private": true,
+  "type": "commonjs",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc -p .",
-    "start": "node dist/index.js",
-    "seed:users-list": "node scripts/seedUsersList.js"
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
