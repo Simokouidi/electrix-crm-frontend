@@ -1,39 +1,53 @@
-  - name: Set up QEMU
-    uses: docker/setup-qemu-action@v2
+﻿name: Build and publish images
 
-  - name: Set up Docker Buildx
-    uses: docker/setup-buildx-action@v2
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
 
-  # NEW: compute lowercase owner and repo (GHCR requires lowercase repo names)
-  - name: Compute image names (lowercase)
-    id: vars
-    shell: bash
-    run: |
-      echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
-      REPO_NAME="${GITHUB_REPOSITORY##*/}"
-      echo "REPO_LC=${REPO_NAME,,}" >> "$GITHUB_OUTPUT"
+permissions:
+  contents: read
+  packages: write
 
-  - name: Log in to GitHub Container Registry
-    uses: docker/login-action@v2
-    with:
-      registry: ghcr.io
-      username: ${{ github.actor }}
-      password: ${{ secrets.GITHUB_TOKEN }}
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-  - name: Build and push frontend image
-    uses: docker/build-push-action@v4
-    with:
-      context: .
-      file: docker/frontend.Dockerfile
-      push: true
-      # UPDATED: use lowercase owner/repo; remove duplicate owner segment
-      tags: ghcr.io/${{ steps.vars.outputs.OWNER_LC }}/${{ steps.vars.outputs.REPO_LC }}-frontend:latest
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v2
 
-  - name: Build and push whatsapp-bot image
-    uses: docker/build-push-action@v4
-    with:
-      context: .
-      file: [whatsapp-bot.Dockerfile](http://_vscodecontentref_/0)
-      push: true
-      # UPDATED: use lowercase owner/repo; remove duplicate owner segment
-      tags: ghcr.io/${{ steps.vars.outputs.OWNER_LC }}/${{ steps.vars.outputs.REPO_LC }}-whatsapp-bot:latest
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Compute image names (lowercase)
+        id: vars
+        shell: bash
+        run: |
+          echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          REPO_NAME="${GITHUB_REPOSITORY##*/}"
+          echo "REPO_LC=${REPO_NAME,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push frontend image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: docker/frontend.Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.vars.outputs.OWNER_LC }}/${{ steps.vars.outputs.REPO_LC }}-frontend:latest
+
+      - name: Build and push whatsapp-bot image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: docker/whatsapp-bot.Dockerfile
+          push: true
+          tags: ghcr.io/${{ steps.vars.outputs.OWNER_LC }}/${{ steps.vars.outputs.REPO_LC }}-whatsapp-bot:latest
