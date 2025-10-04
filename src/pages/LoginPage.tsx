@@ -48,7 +48,7 @@ export default function LoginPage(){
   }, [quotes.length])
 
   return (
-    <div className="min-h-screen w-full" style={{ background: 'radial-gradient(1200px 800px at 10% 10%, rgba(99,102,241,0.12), rgba(0,0,0,0)), linear-gradient(135deg,#0b1220 0%, #0f172a 40%, #111827 100%)' }}>
+  <div className="min-h-screen w-full" style={{ background: 'radial-gradient(1200px 800px at 10% 10%, rgba(99,102,241,0.12), rgba(0,0,0,0)), linear-gradient(135deg,#0b1220 0%, #0f172a 40%, #111827 100%)' }}>
       {/* Centering wrapper */}
       <div className={`min-h-screen grid place-items-center px-4 sm:px-6 transition-opacity duration-500 ${mounted ? 'opacity-100' : 'opacity-0'}`}>
         {/* Framed container (rounded, shadow, subtle border) */}
