@@ -12,6 +12,23 @@ body{
   @apply bg-gray-50 text-slate-800 font-sans;
 }
 
+/* Global scale: render the entire app at ~80% size without changing app logic */
+body {
+  zoom: 0.8; /* Supported in Chromium/Edge */
+}
+
+/* Fallback for browsers not supporting zoom (e.g., Safari) */
+@supports not (zoom: 1) {
+  .app-shell {
+    transform: scale(0.8);
+    transform-origin: top left;
+    /* expand layout so scaled content fills viewport width */
+    width: 125%; /* 1 / 0.8 */
+    /* expand height so scaled content fills viewport height */
+    min-height: 125vh;
+  }
+}
+
 .app-shell{
   @apply min-h-screen flex;
 }
@@ -19,6 +36,8 @@ body{
 .sidebar{
   width: 260px;
   @apply bg-gradient-to-b from-[var(--sidebar-from)] to-[var(--sidebar-to)] text-white p-6 flex flex-col gap-6;
+  /* Ensure the sidebar spans full viewport height even when content is short */
+  min-height: 125vh;
 }
 
 .content{

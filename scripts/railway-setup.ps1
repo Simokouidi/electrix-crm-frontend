@@ -3,7 +3,7 @@
 
 Write-Host "Railway helper script: installing or checking Railway CLI..."
 
-function Ensure-Node { 
+function Test-Node { 
     try {
         $node = & node -v 2>$null
         if ($LASTEXITCODE -ne 0) { throw "node not found" }
@@ -15,7 +15,7 @@ function Ensure-Node {
     }
 }
 
-if (-not (Ensure-Node)) { exit 1 }
+if (-not (Test-Node)) { exit 1 }
 
 # Check railway CLI
 $railway = Get-Command railway -ErrorAction SilentlyContinue

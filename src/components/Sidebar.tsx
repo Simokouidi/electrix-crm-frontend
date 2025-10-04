@@ -2,7 +2,7 @@ import React from 'react'
 import Logo from '../Images/Logo_copy2.png'
 import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useStore } from '../lib/store'
-import { SETTINGS_TABS } from '../lib/settingsTabs'
+import { SETTINGS_TABS, getAllowedSettingsTabs } from '../lib/settingsTabs'
 // lucide-react exports vary between versions; use a loose 'any' for icon components to avoid type issues
 import {
   Briefcase,
@@ -36,7 +36,12 @@ export default function Sidebar(): JSX.Element {
     setShowSettingsSections,
     setSelectedSettingsTab,
     selectedSettingsTab,
+    currentUser
   } = useStore()
+
+  const role = String(currentUser?.role || '').toLowerCase()
+  const allowedTabs = getAllowedSettingsTabs(role)
+  const canSeeSettings = allowedTabs.length > 0 // all roles at least see Organization
 
   const nav = useNavigate()
   const location = useLocation()
@@ -66,7 +71,9 @@ export default function Sidebar(): JSX.Element {
       </div>
 
       <ul className="mt-8 space-y-2 flex-1" role="menu">
-        {links.map((l) => {
+        {links
+          .filter(l => l.to !== '/settings' || canSeeSettings)
+          .map((l) => {
           const Icon = l.icon
           return (
             <li key={l.to}>
@@ -85,7 +92,7 @@ export default function Sidebar(): JSX.Element {
                 <span>{l.label}</span>
               </NavLink>
 
-              {l.to === '/settings' && onSettingsRoute && (
+              {l.to === '/settings' && onSettingsRoute && canSeeSettings && (
                 <div className="pl-3 mt-2 flex flex-col items-start">
                   <button
                     className="text-xs text-white/70 hover:text-white/90 px-3 py-1.5 rounded-md bg-white/5 mb-2"
@@ -101,7 +108,7 @@ export default function Sidebar(): JSX.Element {
                     <div className="mt-0.5 rounded-2xl shadow-inner bg-white/4" style={{ minWidth: 200 }}>
                       <div className="px-2 py-1.5">
                         <div className="space-y-0.5">
-                          {SETTINGS_TABS.map((st) => {
+                          {allowedTabs.map((st) => {
                             const IconComp = iconMap[st] || Briefcase
                             const active = selectedSettingsTab === st
                             return (

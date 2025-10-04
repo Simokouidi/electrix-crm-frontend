@@ -3,10 +3,16 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm:dev:server\" \"npm:dev:frontend\" --kill-others-on-fail",
+    "dev:frontend": "vite",
+    "dev:server": "npm --prefix server run dev",
     "build": "vite build",
     "preview": "vite preview",
     "start": "serve -s dist -l $PORT",
+    "test:e2e": "powershell -File scripts\\run-tests.ps1 -DatabaseUrl $env:DATABASE_URL",
+    "server:seed": "node server/scripts/seedAdmin.js",
+    "server:check": "node server/scripts/checkUser.js",
+    "server:stop": "node server/scripts/stopServer.js",
     "whatsapp-bot": "node ./scripts/whatsapp-bot.js"
   },
   "dependencies": {
@@ -18,20 +24,24 @@
     "react-dom": "^18.2.0",
     "react-router-dom": "^7.9.1",
     "serve": "^14.1.2",
+    "socket.io-client": "^4.7.2",
     "uuid": "^11.1.0",
     "whatsapp-web.js": "^1.19.0"
   },
   "devDependencies": {
+    "@types/node": "^24.5.1",
     "@types/react": "^18.3.24",
     "@types/react-dom": "^18.3.7",
     "@types/react-router-dom": "^5.3.3",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.0.1",
     "autoprefixer": "^10.4.14",
+    "concurrently": "^8.2.0",
     "playwright": "^1.44.0",
     "postcss": "^8.4.24",
     "tailwindcss": "^3.4.8",
-    "typescript": "^5.1.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2",
     "vite": "^5.2.0"
   }
 }
