@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { Server as IOServer } from 'socket.io';
-import { getPool } from '../db';
+// Note: avoid importing ../db to prevent TS workspace resolution conflicts; use req.app.db directly
+function getPool(req: any){ return (req?.app as any)?.db }
 
 export default function clientsRouter(io: IOServer) {
   const router = Router();

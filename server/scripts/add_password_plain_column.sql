@@ -1,1 +1,0 @@
-ALTER TABLE `users` ADD COLUMN `password_plain` VARCHAR(255) NULL AFTER `password`;

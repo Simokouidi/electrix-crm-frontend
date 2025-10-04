@@ -3,6 +3,7 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import './styles.css'
 import { StoreProvider } from './lib/store'
+import loginBgUrl from './Images/Background.png'
 
 // Import the Electrix logo so Vite will resolve and copy it to the build output
 import logoUrl from './Images/Logo_copy2.png'
@@ -24,6 +25,16 @@ if (typeof document !== 'undefined') {
     link.rel = 'icon'
   }
   document.title = 'ELECTRIX CRM'
+
+  // Preload the login background image so it is available immediately
+  try {
+    const preload = document.createElement('link') as HTMLLinkElement
+    preload.rel = 'preload'
+    preload.setAttribute('as', 'image')
+    preload.href = loginBgUrl as unknown as string
+    preload.setAttribute('fetchpriority', 'high')
+    document.head.appendChild(preload)
+  } catch {}
 }
 
 const container = document.getElementById('root')
