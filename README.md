@@ -44,3 +44,23 @@ What I built
 Notes / Assumptions
 - Uses Tailwind for styling and lucide-react for icons. Colors and spacing chosen to match spec closely.
 - Data is in-memory (src/lib/store.tsx). Reset Demo Data restores seed data.
+
+## Railway deployment (frontend + backend + MySQL)
+
+1) Backend service (server directory)
+  - Root Directory: `server`
+  - Install: `npm ci`
+  - Build: `npm run build`
+  - Start: `npm start`
+  - Env: set `DATABASE_URL` (mysql://user:pass@host:port/db) or provide the native vars `MYSQLHOST`, `MYSQLPORT`, `MYSQLUSER`, `MYSQLPASSWORD`, `MYSQLDATABASE`.
+  - Optional: `ADMIN_NAME`, `ADMIN_PASSWORD`.
+
+2) Frontend service (project root)
+  - Install: `npm ci`
+  - Build: `npm run build`
+  - Start (preview): `npm run preview -- --host 0.0.0.0 --port $PORT`
+  - Env: `VITE_API_BASE = https://<your-backend>.railway.app`
+
+3) Verify
+  - Backend: open `/health` → `{ ok: true }`
+  - Frontend: Network calls should target `VITE_API_BASE` under `/api/*`.
