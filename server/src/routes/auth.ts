@@ -28,18 +28,64 @@ export default function authRouter(io: IOServer) {
       const [rows]: any = await pool.query('SELECT * FROM users WHERE email = ? OR name = ? LIMIT 1', [username, username]);
       const user = (rows as any[])[0];
       if(!user) return res.status(401).json({ error: 'Invalid credentials' });
-      // if password column exists, verify; otherwise accept if role is Admin and password matches ADMIN_PASSWORD env var
+      // Verification order:
+      // 1) If a hashed password exists, compare using bcrypt
       if(user.password){
-        const ok = await bcrypt.compare(password, user.password);
+        const ok = await bcrypt.compare(String(password), String(user.password));
         if(!ok) return res.status(401).json({ error: 'Invalid credentials' });
       } else {
-        // no stored password: fallback to check against ADMIN_PASSWORD env if name matches
-        const adminPass = process.env.ADMIN_PASSWORD || 'Admin';
-        if(user.name !== (process.env.ADMIN_NAME || 'Admin') || password !== adminPass) return res.status(401).json({ error: 'Invalid credentials' });
+        // 2) If a plaintext column exists (password_plain), compare case-insensitively
+        try{
+          const [cols]: any = await pool.query(`SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'password_plain'`)
+          if(Array.isArray(cols) && cols.length){
+            // read the plaintext column directly for this user
+            const [prow]: any = await pool.query('SELECT password_plain FROM users WHERE id = ? LIMIT 1', [user.id])
+            const plain = Array.isArray(prow) && prow.length ? (prow[0].password_plain ?? null) : null
+            if(plain && String(plain).toLowerCase() === String(password).toLowerCase()){
+              // ok
+            } else {
+              // 3) As last resort for legacy data: accept last word of name as password (family name policy)
+              const lastName = String(user.name || '').trim().split(/\s+/).slice(-1)[0]
+              if(!lastName || String(lastName).toLowerCase() !== String(password).toLowerCase()){
+                // 4) Also allow admin override when the record has no stored password
+                const adminPass = process.env.ADMIN_PASSWORD || 'Admin';
+                const isAdminName = String(user.name) === (process.env.ADMIN_NAME || 'Admin')
+                if(!(isAdminName && String(password) === adminPass)){
+                  return res.status(401).json({ error: 'Invalid credentials' });
+                }
+              }
+            }
+          } else {
+            // No plaintext column — attempt last-name policy before admin override
+            const lastName = String(user.name || '').trim().split(/\s+/).slice(-1)[0]
+            if(!lastName || String(lastName).toLowerCase() !== String(password).toLowerCase()){
+              const adminPass = process.env.ADMIN_PASSWORD || 'Admin';
+              const isAdminName = String(user.name) === (process.env.ADMIN_NAME || 'Admin')
+              if(!(isAdminName && String(password) === adminPass)){
+                return res.status(401).json({ error: 'Invalid credentials' });
+              }
+            }
+          }
+        }catch{
+          // If any error occurred checking plaintext column, fallback to last-name/admin policy
+          const lastName = String(user.name || '').trim().split(/\s+/).slice(-1)[0]
+          if(!lastName || String(lastName).toLowerCase() !== String(password).toLowerCase()){
+            const adminPass = process.env.ADMIN_PASSWORD || 'Admin';
+            const isAdminName = String(user.name) === (process.env.ADMIN_NAME || 'Admin')
+            if(!(isAdminName && String(password) === adminPass)){
+              return res.status(401).json({ error: 'Invalid credentials' });
+            }
+          }
+        }
       }
 
-      // omit password in response
-      const { password: _p, ...safe } = user;
+      // Successful login: update last_login if the column exists
+      try{
+        await pool.query(`UPDATE users SET last_login = UTC_TIMESTAMP() WHERE id = ?`, [user.id])
+      }catch{ /* ignore */ }
+
+      // omit secret fields in response
+      const { password: _p, password_plain: _pp, ...safe } = user;
       return res.json({ ok: true, user: safe });
     }catch(err:any){
       console.error('Auth error', err?.message || err);

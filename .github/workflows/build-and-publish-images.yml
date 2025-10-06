@@ -1,4 +1,4 @@
-﻿name: Build and publish images
+name: Build and publish images
 
 on:
   push:
@@ -21,6 +21,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
 
+      # Compute lowercased owner and repo name for GHCR (GHCR requires lowercase repo names)
       - name: Compute image names (lowercase)
         id: vars
         shell: bash
