@@ -105,26 +105,17 @@ export default function usersRouter(io: IOServer) {
     `);
     try{
       let mapped = Array.isArray(rows) ? (rows as any[]).map(normalizeRow) : rows
-      // Enforce DB-driven RLS (no hardcoding of specific users):
-      // - Owner: see everything
-      // - Admin + team = All Markets: see Admins + Users in all teams (exclude Owners)
-      // - Admin + specific team: see Users in same team (exclude Admins/Owners) + self
-      // - User: see only self
+      // Enforce DB-driven RLS
       const auth = await getAuthUser(req)
       if(auth && Array.isArray(mapped)){
         const role = String(auth.role || '').toLowerCase()
         if(role === 'owner'){
-          // no filter — Owners see everything
+          // see everything
         } else if(role === 'admin'){
           const adminTeam = String(auth.team || '').toLowerCase()
           if(adminTeam.includes('all market')){
-            // Admin of All Markets: include Admins and Users, exclude Owners
-            mapped = mapped.filter((u:any)=>{
-              const r = String((u.role||'')).toLowerCase()
-              return r !== 'owner'
-            })
+            mapped = mapped.filter((u:any)=> String((u.role||'')).toLowerCase() !== 'owner')
           } else if(adminTeam){
-            // Admin of specific market: include Users in same market; always include self
             mapped = mapped.filter((u:any)=>{
               const isSelf = String(u.id) === String(auth.id)
               const r = String((u.role||'')).toLowerCase()
@@ -133,11 +124,9 @@ export default function usersRouter(io: IOServer) {
               return isSelf || (isUserLevel && sameTeam)
             })
           } else {
-            // Admin with no team info: restrict to self only
             mapped = mapped.filter((u:any)=> String(u.id) === String(auth.id))
           }
         } else {
-          // User-level: self only
           mapped = mapped.filter((u:any)=> String(u.id) === String(auth.id))
         }
       }
