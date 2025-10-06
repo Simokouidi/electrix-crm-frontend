@@ -1,0 +1,22 @@
+# Force a Node-only Nixpacks plan for the frontend
+[build]
+providers = ["node"]
+
+[variables]
+NODE_ENV = "production"
+
+[phases.setup]
+# Match Railway log: nodejs_18 and npm-9_x
+nixpkgs = ["nodejs_18", "npm-9_x"]
+
+[phases.install]
+# Use ci for clean, repeatable installs in CI
+cmd = "npm ci"
+
+[phases.build]
+cmd = "npm run build"
+
+[start]
+# Serve the built dist on the provided PORT and bind to all interfaces
+# Using serve (already in dependencies) ensures a simple static hosting
+cmd = "npx serve -s dist -l tcp://0.0.0.0:${PORT}"
