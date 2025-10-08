@@ -14,6 +14,7 @@ router.get('/activity-scores', async (req: Request, res: Response) => {
     // Determine DB/schema name dynamically
     const [dbRows]: any = await pool.query('SELECT DATABASE() AS db')
     const dbName = (Array.isArray(dbRows) && dbRows.length ? String(dbRows[0].db || dbRows[0].DB || '') : '').trim() || 'railway'
+    // Prefer view built on user_usage; fallback to v_usage_activity if present
     const view = `\`${dbName}\`.\`v_usage_activity\``
     const users = `\`${dbName}\`.\`users\``
 
