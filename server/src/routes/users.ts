@@ -71,13 +71,16 @@ export default function usersRouter(io: IOServer) {
     const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
     if(!hdrId && !hdrEmail) return null
     try{
-      const [rows]: any = await pool.query(
-        `SELECT id, name, email, role, team
-         FROM users
-         WHERE (id = ? AND ? <> '') OR (email = ? AND ? <> '')
-         LIMIT 1`,
-        [hdrId, hdrId, hdrEmail, hdrEmail]
-      )
+      const schema:any[] | null = (req.app as any).schema?.users || null
+      const cols = Array.isArray(schema) ? schema.map((c:any)=> String(c.name)) : []
+      const hasCol = (n:string)=> cols.includes(n)
+      const teamCol = hasCol('team') ? 'team' : (hasCol('Team') ? 'Team' : (hasCol('market') ? 'market' : (hasCol('Market') ? 'Market' : null)))
+      let sql = `SELECT id, name, email, role, ${teamCol ? ('`'+teamCol+'`') : 'NULL'} AS team FROM users WHERE `
+      let params:any[] = []
+      if(hdrId){ sql += ' id = ?'; params.push(hdrId) }
+      if(hdrEmail){ sql += hdrId ? ' OR LOWER(email) = LOWER(?)' : ' LOWER(email) = LOWER(?)'; params.push(hdrEmail) }
+      sql += ' LIMIT 1'
+      const [rows]: any = await pool.query(sql, params)
       return Array.isArray(rows) && rows.length ? rows[0] : null
     }catch{ return null }
   }
@@ -85,24 +88,25 @@ export default function usersRouter(io: IOServer) {
   router.get('/', async (req: any, res: any) => {
     const pool = getPool(req);
     if (!pool) return res.json({ data: [] });
-    // include commonly used fields; account for capitalized Phone column and last_login
-    const [rows] = await pool.query(`
-      SELECT 
-        id,
-        name,
-        role,
-        email,
-        CASE WHEN EXISTS(
-          SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS 
-          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'Phone'
-        ) THEN Phone ELSE phone END AS phone,
-        team,
-        status,
-        last_login,
-        created_at,
-        updated_at
-      FROM users
-    `);
+    // Build SELECT dynamically based on available columns in schema
+    const schema:any[] | null = (req.app as any).schema?.users || null
+    const cols = Array.isArray(schema) ? schema.map((c:any)=> String(c.name)) : []
+    const hasCol = (n:string)=> cols.includes(n)
+    const teamCol = hasCol('team') ? 'team' : (hasCol('Team') ? 'Team' : (hasCol('market') ? 'market' : (hasCol('Market') ? 'Market' : null)))
+    const phoneCol = hasCol('phone') ? 'phone' : (hasCol('Phone') ? 'Phone' : null)
+    const managerCol = hasCol('manager_id') ? 'manager_id' : null
+    const selectParts = [
+      'id','name','role','email',
+      phoneCol ? `\`${phoneCol}\` AS phone` : 'NULL AS phone',
+      teamCol ? `\`${teamCol}\` AS team` : 'NULL AS team',
+      managerCol ? `\`${managerCol}\` AS manager_id` : 'NULL AS manager_id',
+      hasCol('status') ? '`status`' : 'NULL AS status',
+      hasCol('last_login') ? '`last_login`' : 'NULL AS last_login',
+      hasCol('created_at') ? '`created_at`' : 'NULL AS created_at',
+      hasCol('updated_at') ? '`updated_at`' : 'NULL AS updated_at'
+    ]
+    const sqlList = `SELECT ${selectParts.join(', ')} FROM users`
+    const [rows] = await pool.query(sqlList);
     try{
       let mapped = Array.isArray(rows) ? (rows as any[]).map(normalizeRow) : rows
       // Enforce DB-driven RLS
@@ -112,19 +116,23 @@ export default function usersRouter(io: IOServer) {
         if(role === 'owner'){
           // see everything
         } else if(role === 'admin'){
-          const adminTeam = String(auth.team || '').toLowerCase()
+          const norm = (s:any)=> String(s||'').toLowerCase().replace(/\s+/g,' ').trim()
+          const adminTeam = norm(auth.team)
           if(adminTeam.includes('all market')){
+            // All Markets Admin: show admins and users (not owners)
             mapped = mapped.filter((u:any)=> String((u.role||'')).toLowerCase() !== 'owner')
           } else if(adminTeam){
+            // Market Admin: see self + user-level in same market
             mapped = mapped.filter((u:any)=>{
               const isSelf = String(u.id) === String(auth.id)
               const r = String((u.role||'')).toLowerCase()
               const isUserLevel = r !== 'owner' && r !== 'admin'
-              const sameTeam = String((u.team||'')).toLowerCase() === adminTeam
+              const sameTeam = norm((u as any).team) === adminTeam
               return isSelf || (isUserLevel && sameTeam)
             })
           } else {
-            mapped = mapped.filter((u:any)=> String(u.id) === String(auth.id))
+            // Fallback: if team cannot be resolved, behave like All Markets (exclude owners) but keep self
+            mapped = mapped.filter((u:any)=> String(u.id) === String(auth.id) || String((u.role||'')).toLowerCase() !== 'owner')
           }
         } else {
           mapped = mapped.filter((u:any)=> String(u.id) === String(auth.id))
@@ -140,19 +148,22 @@ export default function usersRouter(io: IOServer) {
     if(!pool) return res.status(500).json({ error: 'No DB' })
     const id = req.params.id
     try{
-      const [rows]: any = await pool.query(`
-        SELECT 
-          id,
-          name,
-          role,
-          email,
-          CASE WHEN EXISTS(
-            SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS 
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'Phone'
-          ) THEN Phone ELSE phone END AS phone,
-          team, status, last_login, created_at, updated_at
-        FROM users WHERE id = ?
-      `, [id])
+      const schema:any[] | null = (req.app as any).schema?.users || null
+      const cols = Array.isArray(schema) ? schema.map((c:any)=> String(c.name)) : []
+      const hasCol = (n:string)=> cols.includes(n)
+      const teamCol = hasCol('team') ? 'team' : (hasCol('Team') ? 'Team' : (hasCol('market') ? 'market' : (hasCol('Market') ? 'Market' : null)))
+      const phoneCol = hasCol('phone') ? 'phone' : (hasCol('Phone') ? 'Phone' : null)
+      const selectParts = [
+        'id','name','role','email',
+        phoneCol ? `\`${phoneCol}\` AS phone` : 'NULL AS phone',
+        teamCol ? `\`${teamCol}\` AS team` : 'NULL AS team',
+        hasCol('status') ? '`status`' : 'NULL AS status',
+        hasCol('last_login') ? '`last_login`' : 'NULL AS last_login',
+        hasCol('created_at') ? '`created_at`' : 'NULL AS created_at',
+        hasCol('updated_at') ? '`updated_at`' : 'NULL AS updated_at'
+      ]
+      const sqlOne = `SELECT ${selectParts.join(', ')} FROM users WHERE id = ?`
+      const [rows]: any = await pool.query(sqlOne, [id])
       const row = Array.isArray(rows) ? rows[0] : rows
       if(!row) return res.status(404).json({ error: 'Not found' })
       return res.json({ data: normalizeRow(row) })
@@ -266,15 +277,23 @@ export default function usersRouter(io: IOServer) {
     try{
       const [r]: any = await pool.query(sql, params)
       const id = r.insertId
-      const [rows] = await pool.query(`
-        SELECT id, name, role, email,
-               CASE WHEN EXISTS(
-                 SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS 
-                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'Phone'
-               ) THEN Phone ELSE phone END AS phone,
-               team, status, last_login, created_at, updated_at, password
-        FROM users WHERE id = ?
-      `, [id])
+      const schema:any[] | null = (req.app as any).schema?.users || null
+      const cols = Array.isArray(schema) ? schema.map((c:any)=> String(c.name)) : []
+      const hasCol = (n:string)=> cols.includes(n)
+      const teamCol = hasCol('team') ? 'team' : (hasCol('Team') ? 'Team' : (hasCol('market') ? 'market' : (hasCol('Market') ? 'Market' : null)))
+      const phoneCol = hasCol('phone') ? 'phone' : (hasCol('Phone') ? 'Phone' : null)
+      const selectParts = [
+        'id','name','role','email',
+        phoneCol ? `\`${phoneCol}\` AS phone` : 'NULL AS phone',
+        teamCol ? `\`${teamCol}\` AS team` : 'NULL AS team',
+        hasCol('status') ? '`status`' : 'NULL AS status',
+        hasCol('last_login') ? '`last_login`' : 'NULL AS last_login',
+        hasCol('created_at') ? '`created_at`' : 'NULL AS created_at',
+        hasCol('updated_at') ? '`updated_at`' : 'NULL AS updated_at',
+        hasCol('password') ? '`password`' : 'NULL AS password'
+      ]
+      const sqlSel = `SELECT ${selectParts.join(', ')} FROM users WHERE id = ?`
+      const [rows] = await pool.query(sqlSel, [id])
       const created = (rows as any[])[0]
       const mapped = normalizeRow(created)
       let passwordVerified: boolean | undefined = undefined

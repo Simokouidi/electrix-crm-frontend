@@ -987,14 +987,95 @@ ELECTRIX Admin`}</pre>
                 )}
               </div>
             ) : (
-              <div className="card p-6">
-                <h2 className="text-xl font-semibold mb-3">{tab}</h2>
-                <div className="text-sm text-slate-500">This section is scaffolded and will be implemented per your detailed spec.</div>
+              <div className="bg-white rounded-2xl p-6 border border-gray-200">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-xl font-semibold text-slate-800">{tab}</h2>
+                </div>
+                {tab === 'Automation' ? (
+                  <AutomationTab isOwner={isOwner} isAdmin={isAdmin} />
+                ) : (
+                  <div className="text-sm text-slate-500">This section is scaffolded and will be implemented per your detailed spec.</div>
+                )}
               </div>
             )}
           </div>
         )}
       </main>
+      </div>
+    </div>
+  )
+}
+
+function AutomationTab({ isOwner, isAdmin }: { isOwner: boolean; isAdmin: boolean }){
+  const [qr, setQr] = React.useState<string | null>(null)
+  const [ready, setReady] = React.useState<boolean>(false)
+  const [loading, setLoading] = React.useState<boolean>(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const viteEnv: any = (import.meta as any)?.env || {}
+  const apiBase = viteEnv.VITE_API_URL || (window.location.port === '4000' ? '' : 'http://127.0.0.1:4000')
+
+  const canView = isOwner
+  React.useEffect(()=>{
+    if(!canView) setError('You do not have access to Automation settings.')
+  }, [canView])
+
+  const fetchQr = async () => {
+    setLoading(true)
+    setError(null)
+    try{
+      const r = await fetch(`${apiBase}/api/bot/qr`)
+      if(!r.ok){
+        const txt = await r.text().catch(()=>`${r.status}`)
+        throw new Error(txt)
+      }
+      const j = await r.json()
+      setReady(!!j.ready)
+      setQr(j.qr || null)
+    }catch(e:any){
+      setError('Failed to reach bot. Make sure the backend is running on port 4000.')
+    } finally { setLoading(false) }
+  }
+
+  const refresh = () => fetchQr()
+
+  return (
+    <div>
+      <div className="text-sm text-slate-700">Manage WhatsApp connection. Only Owners can access this page.</div>
+      {!canView && (
+        <div className="mt-3 text-rose-600 text-sm">Only Owners can view this page.</div>
+      )}
+      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="p-5 rounded-xl bg-white border border-gray-200 text-slate-800">
+          <h3 className="font-semibold text-slate-800">Bot connection</h3>
+          <div className="mt-3 space-y-3 text-sm">
+            <div className="flex items-center gap-2">
+              <button className="px-3 py-2 rounded-md bg-indigo-600 text-white" onClick={fetchQr} disabled={loading}>{loading ? 'Starting…' : 'Generate QR code'}</button>
+              <button className="px-3 py-2 rounded-md border border-gray-300 text-slate-700 bg-white hover:bg-gray-50" onClick={fetchQr} disabled={loading}>Refresh</button>
+            </div>
+            <div className="text-xs text-slate-500">This will start the local WhatsApp bot (if not already running) and fetch a fresh QR. Scan it once; the session persists.</div>
+            {error && <div className="text-sm text-rose-600">{error}</div>}
+          </div>
+        </div>
+
+        <div className="p-5 rounded-xl bg-white border border-gray-200 text-slate-800">
+          <h3 className="font-semibold text-slate-800">Scan to connect</h3>
+          <div className="mt-3 text-sm text-slate-700">If the bot is not connected yet, a QR will appear here. Open WhatsApp → Linked Devices → Link a device and scan it.</div>
+          <div className="mt-4">
+            {loading ? (
+              <div className="text-slate-600">Loading…</div>
+            ) : ready ? (
+              <div className="text-green-700 bg-green-50 border border-green-200 rounded p-3 text-sm">Bot is connected and ready. No QR required.</div>
+            ) : qr ? (
+              <div>
+                <img alt="WhatsApp QR" className="border border-gray-200 rounded" src={`https://api.qrserver.com/v1/create-qr-code/?size=256x256&data=${encodeURIComponent(qr)}`} />
+                <div className="mt-2 text-xs text-slate-500">If the QR expires, click Refresh.</div>
+              </div>
+            ) : (
+              <div className="text-slate-600">No QR yet. Click "Generate QR code" to fetch.</div>
+            )}
+            <div className="mt-3"/>
+          </div>
+        </div>
       </div>
     </div>
   )

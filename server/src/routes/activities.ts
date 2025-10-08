@@ -20,7 +20,16 @@ export default function activitiesRouter(io: IOServer) {
         const hdrId = (req.headers['x-user-id'] || req.headers['X-User-Id'] || '') as string
         const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
         if(!hdrId && !hdrEmail) return null
-        const [urows]: any = await db.query('SELECT id, email, role, team FROM users WHERE (id = ? AND ? <> "") OR (email = ? AND ? <> "") LIMIT 1', [hdrId, hdrId, hdrEmail, hdrEmail])
+        const schema:any[] | null = (req.app as any).schema?.users || null
+        const cols = Array.isArray(schema) ? schema.map((c:any)=> String(c.name)) : []
+        const hasCol = (n:string)=> cols.includes(n)
+        const teamCol = hasCol('team') ? 'team' : (hasCol('Team') ? 'Team' : (hasCol('market') ? 'market' : (hasCol('Market') ? 'Market' : null)))
+        let sql = `SELECT id, email, role, ${teamCol ? ('`'+teamCol+'`') : 'NULL'} AS team FROM users WHERE `
+        const params:any[] = []
+        if(hdrId){ sql += ' id = ?'; params.push(hdrId) }
+        if(hdrEmail){ sql += hdrId ? ' OR LOWER(email) = LOWER(?)' : ' LOWER(email) = LOWER(?)'; params.push(hdrEmail) }
+        sql += ' LIMIT 1'
+        const [urows]: any = await db.query(sql, params)
         return Array.isArray(urows) && urows.length ? urows[0] : null
       }catch{ return null }
     }
@@ -31,6 +40,30 @@ export default function activitiesRouter(io: IOServer) {
       }catch{ return [] }
     }
     try{ 
+      // Load users to allow robust owner resolution
+      const schemaUsers:any[] | null = (req.app as any).schema?.users || null
+      const colsU = Array.isArray(schemaUsers) ? schemaUsers.map((c:any)=> String(c.name)) : []
+      const hasColU = (n:string)=> colsU.includes(n)
+      const teamColU = hasColU('team') ? 'team' : (hasColU('Team') ? 'Team' : (hasColU('market') ? 'market' : (hasColU('Market') ? 'Market' : null)))
+      const [urows]: any = await db.query(`SELECT id, email, name, role, ${teamColU ? ('`'+teamColU+'`') : 'NULL'} AS team FROM users`)
+      const usersByEmail = new Map<string, any>()
+      const usersByName = new Map<string, any>()
+      for(const u of (Array.isArray(urows)?urows:[])){
+        const email = (u.email ? String(u.email).toLowerCase() : '')
+        const name = (u.name ? String(u.name).toLowerCase() : '')
+        if(email) usersByEmail.set(email, u)
+        if(name) usersByName.set(name, u)
+      }
+      const resolveOwnerId = (a:any): string =>{
+        if(!a || typeof a !== 'object') return ''
+        const id1 = a.ownerId ?? a.userId ?? a.owner_id ?? a.user_id
+        if(id1 !== undefined && id1 !== null && String(id1) !== '') return String(id1)
+        const email = (a.owner_email ?? a.user_email ?? '').toString().toLowerCase()
+        if(email && usersByEmail.has(email)) return String(usersByEmail.get(email).id)
+        const name = (a.Owner ?? a.owner ?? '').toString().toLowerCase()
+        if(name && usersByName.has(name)) return String(usersByName.get(name).id)
+        return ''
+      }
       let mapped = Array.isArray(rows) ? (rows as any[]).map(normalizeRow) : rows; 
       const auth = await getAuthUser()
       if(auth && Array.isArray(mapped)){
@@ -38,32 +71,27 @@ export default function activitiesRouter(io: IOServer) {
         if(role === 'owner'){
           // full access
         } else if(role === 'admin'){
-          const adminTeam = String(auth.team||'').toLowerCase()
+          const norm = (s:any)=> String(s||'').toLowerCase().replace(/\s+/g,' ').trim()
+          const adminTeam = norm(auth.team)
           if(adminTeam.includes('all market')){
             // full access
           } else {
-            const teamRows = await getTeam()
+            // Admin sees activities owned by users in same market, or tied to clients of those users
             const allowedOwnerIds = new Set<string>()
-            for(const u of teamRows){
-              const roleLower = String(u.role||'').toLowerCase()
-              const uTeam = String(u.team||'').toLowerCase()
-              const reportsTo = u.manager_id != null ? String(u.manager_id) : ''
-              const isUserLevel = roleLower === 'user' || roleLower === 'bdm'
-              const sameMarket = adminTeam && uTeam === adminTeam
-              const reportsToAdmin = reportsTo && reportsTo === String(auth.id)
-              if(isUserLevel && (sameMarket || reportsToAdmin)) allowedOwnerIds.add(String(u.id))
+            for(const u of (Array.isArray(urows)?urows:[])){
+              const uTeam = norm(u.team)
+              const uRole = String(u.role||'').toLowerCase()
+              if(uTeam === adminTeam && (uRole === 'user' || uRole === 'bdm')) allowedOwnerIds.add(String(u.id))
             }
             allowedOwnerIds.add(String(auth.id))
-            // Filter by ownerId or by visible clients for those owners
-            // Determine visible clients
-            const [clientRows]: any = await db.query('SELECT id, owner_id FROM clients')
+            const [clientRows]: any = await db.query('SELECT id, owner_id, owner_email, owner FROM clients')
             const visibleClientIds = new Set<string>()
-            for(const c of clientRows){
-              const ownerId = String(c.owner_id || c.ownerId || '')
-              if(allowedOwnerIds.has(ownerId)) visibleClientIds.add(String(c.id))
+            for(const c of (Array.isArray(clientRows)?clientRows:[])){
+              const ownerId = String(c.owner_id || '') || (c.owner_email && usersByEmail.get(String(c.owner_email).toLowerCase())?.id) || (c.owner && usersByName.get(String(c.owner).toLowerCase())?.id) || ''
+              if(ownerId && allowedOwnerIds.has(String(ownerId))) visibleClientIds.add(String(c.id))
             }
             mapped = mapped.filter((a:any)=> {
-              const ownerId = String(a.ownerId || a.userId || a.owner_id || a.user_id || '')
+              const ownerId = resolveOwnerId(a)
               const clientId = a.clientId || a.client_id
               if(ownerId && allowedOwnerIds.has(String(ownerId))) return true
               if(clientId && visibleClientIds.has(String(clientId))) return true
@@ -73,10 +101,14 @@ export default function activitiesRouter(io: IOServer) {
         } else {
           // user-level: own activities or activities for own clients
           const selfId = String(auth.id)
-          const [clientRows]: any = await db.query('SELECT id FROM clients WHERE owner_id = ? OR ownerId = ?', [selfId, selfId])
-          const ownClientIds = new Set<string>((Array.isArray(clientRows) ? clientRows : []).map((c:any)=> String(c.id)))
+          const [clientRows]: any = await db.query('SELECT id, owner_id, owner_email, owner FROM clients')
+          const ownClientIds = new Set<string>()
+          for(const c of (Array.isArray(clientRows)?clientRows:[])){
+            const ownerId = String(c.owner_id || '') || (c.owner_email && usersByEmail.get(String(c.owner_email).toLowerCase())?.id) || (c.owner && usersByName.get(String(c.owner).toLowerCase())?.id) || ''
+            if(ownerId && String(ownerId) === selfId) ownClientIds.add(String(c.id))
+          }
           mapped = mapped.filter((a:any)=> {
-            const ownerId = String(a.ownerId || a.userId || a.owner_id || a.user_id || '')
+            const ownerId = resolveOwnerId(a)
             const clientId = a.clientId || a.client_id
             if(ownerId && ownerId === selfId) return true
             if(clientId && ownClientIds.has(String(clientId))) return true
@@ -94,6 +126,24 @@ export default function activitiesRouter(io: IOServer) {
     const schema = (req.app as any).schema?.activities || null
     const payload:any = {}
     const dbgPrefix = '[activities:POST]'
+    const db:any = pool
+    // RLS (mutations): Users cannot modify Assignment
+    try{
+      const hdrId = (req.headers['x-user-id'] || req.headers['X-User-Id'] || '') as string
+      const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
+      if(hdrId || hdrEmail){
+        const [urows]: any = await db.query('SELECT id, email, role FROM users WHERE (id = ? AND ? <> "") OR (email = ? AND ? <> "") LIMIT 1', [hdrId, hdrId, hdrEmail, hdrEmail])
+        const u = Array.isArray(urows) && urows.length ? urows[0] : null
+        const role = String((u && u.role) || '').toLowerCase()
+        const hasAssignment = (
+          req.body.assignment !== undefined || req.body.Assignment !== undefined ||
+          (schema && Array.isArray(schema) && schema.some((c:any)=> c.name==='assignment' && payload.assignment !== undefined))
+        )
+        if((role === 'user' || role === 'bdm') && hasAssignment){
+          return res.status(403).json({ code: 'ERR_FORBIDDEN_ASSIGN', message: 'Users are not allowed to modify Assignment' })
+        }
+      }
+    }catch{ /* ignore */ }
     try{ console.debug(dbgPrefix, 'incoming body =', JSON.stringify(req.body)) }catch(_){ console.debug(dbgPrefix, 'incoming body (non-json)') }
     function snakeToCamel(s: string){ return s.replace(/_([a-z])/g, (_,c)=>c.toUpperCase()) }
     if(schema){
@@ -281,6 +331,21 @@ export default function activitiesRouter(io: IOServer) {
     const schema = (req.app as any).schema?.activities || null
     const payload:any = {}
     const dbgPrefix = '[activities:PUT]'
+    const db:any = pool
+    // RLS (mutations): Users cannot modify Assignment
+    try{
+      const hdrId = (req.headers['x-user-id'] || req.headers['X-User-Id'] || '') as string
+      const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
+      if(hdrId || hdrEmail){
+        const [urows]: any = await db.query('SELECT id, email, role FROM users WHERE (id = ? AND ? <> "") OR (email = ? AND ? <> "") LIMIT 1', [hdrId, hdrId, hdrEmail, hdrEmail])
+        const u = Array.isArray(urows) && urows.length ? urows[0] : null
+        const role = String((u && u.role) || '').toLowerCase()
+        const hasAssignment = (req.body.assignment !== undefined || req.body.Assignment !== undefined)
+        if((role === 'user' || role === 'bdm') && hasAssignment){
+          return res.status(403).json({ code: 'ERR_FORBIDDEN_ASSIGN', message: 'Users are not allowed to modify Assignment' })
+        }
+      }
+    }catch{ /* ignore */ }
     try{ console.debug(dbgPrefix, 'id=', id, 'incoming body =', JSON.stringify(req.body)) }catch(_){ console.debug(dbgPrefix, 'incoming body (non-json)') }
     if(schema){
       for(const col of schema){

@@ -6,6 +6,7 @@
     "dev": "concurrently \"npm:dev:server\" \"npm:dev:frontend\" --kill-others-on-fail",
     "dev:frontend": "vite",
     "dev:server": "npm --prefix server run dev",
+    "free:4000": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts\\free-port-4000.ps1",
     "build": "vite build",
     "preview": "vite preview",
     "start": "serve -s dist -l $PORT",

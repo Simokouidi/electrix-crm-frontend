@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react'
 import { useStore, Client } from '../lib/store'
 import Button from '../components/Button'
+// removed reset icon per request
 import { Eye, EyeOff, Pencil, Trash2, Plus } from 'lucide-react'
 import Logo from '../Images/Logo_copy2.png'
 
@@ -56,6 +57,7 @@ export default function ClientsPage(){
   const isOwner = roleLower === 'owner'
   const isAdmin = roleLower === 'admin'
   const isPrivileged = isAdmin || isOwner || roleLower === 'manager'
+  const isUserLevel = roleLower === 'user' || roleLower === 'bdm'
   const canChangeOwner = roleLower === 'admin' || roleLower === 'manager'
   const [search,setSearch] = useState('')
   const [filterStatus,setFilterStatus] = useState('All')
@@ -71,6 +73,16 @@ export default function ClientsPage(){
   const [showToast, setShowToast] = useState<string | null>(null)
   const [rowEmailVisible, setRowEmailVisible] = useState<Record<string,boolean>>({})
   const [pageSize, setPageSize] = useState<number | 'All'>(10)
+  // sorting state
+  type SortKey = 'client'|'status'|'stage'|'owner'|'industry'|'deal'|'prob'|'country'|'activity'|'assignment'|'follow'
+  const [sortBy, setSortBy] = useState<SortKey>('client')
+  const [sortDir, setSortDir] = useState<'asc'|'desc'>('asc')
+  function toggleSort(key: SortKey){
+    setSortBy(prev => {
+      if(prev === key){ setSortDir(d => d==='asc'?'desc':'asc'); return prev }
+      setSortDir('asc'); return key
+    })
+  }
   // edit selector: which client is selected for editing when in Edit mode
   const [selectedEditId, setSelectedEditId] = useState<string>('')
 
@@ -138,15 +150,29 @@ export default function ClientsPage(){
     return result
   }
   const [servicesOpen, setServicesOpen] = useState(false)
+  const servicesRef = React.useRef<HTMLDivElement | null>(null)
 
   function toggleRowEmail(id: string){
     setRowEmailVisible(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
+  // Close services dropdown when clicking outside
+  React.useEffect(() => {
+    if(!servicesOpen) return
+    function onDocClick(e: MouseEvent){
+      const el = servicesRef.current
+      if(el && e.target instanceof Node && !el.contains(e.target)){
+        setServicesOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [servicesOpen])
+
   const rows = useMemo(()=>{
     return clients.filter(c=>{
       // RLS clamp: non-privileged only see their own clients
-      if(!isPrivileged && c.ownerId !== currentUserId) return false
+      if(!isPrivileged && String(c.ownerId) !== String(currentUserId)) return false
       if(search){
         const s = search.toLowerCase()
         if(!(c.clientName.toLowerCase().includes(s)
@@ -154,8 +180,8 @@ export default function ClientsPage(){
           || String(c.contactEmail||'').toLowerCase().includes(s)
           || String(c.ownerEmail||'').toLowerCase().includes(s))) return false
       }
-      if(filterStatus !== 'All' && c.status !== filterStatus) return false
-      if(filterOwner !== 'All' && c.ownerId !== filterOwner) return false
+      if(filterStatus !== 'All' && String(c.status) !== String(filterStatus)) return false
+      if(filterOwner !== 'All' && String(c.ownerId) !== String(filterOwner)) return false
       if(filterNewClient === 'New'){
         const thirtyDaysAgo = new Date(Date.now()-30*24*60*60*1000)
         if(!(new Date(c.createdAt || 0) > thirtyDaysAgo)) return false
@@ -164,12 +190,60 @@ export default function ClientsPage(){
     })
   }, [clients, search, filterStatus, filterOwner, filterNewClient, isPrivileged, currentUserId])
 
-  // derive visibleRows based on collapse state
-  const visibleRows = pageSize === 'All' ? rows : rows.slice(0, pageSize)
+  // sorted rows according to header selection
+  const sortedRows = useMemo(() => {
+    const copy = [...rows]
+    const dir = sortDir === 'asc' ? 1 : -1
+    const s = (v:any) => (v==null?'':String(v)).toLowerCase()
+    copy.sort((a,b) => {
+      switch(sortBy){
+        case 'client': return s(a.clientName).localeCompare(s(b.clientName)) * dir
+        case 'status': return s(a.status).localeCompare(s(b.status)) * dir
+        case 'stage': return s(a.pipelineStage).localeCompare(s(b.pipelineStage)) * dir
+        case 'owner': {
+          const ao = team.find(t=>String(t.id)===String(a.ownerId))?.name || ''
+          const bo = team.find(t=>String(t.id)===String(b.ownerId))?.name || ''
+          return s(ao).localeCompare(s(bo)) * dir
+        }
+        case 'industry': return s(a.industry).localeCompare(s(b.industry)) * dir
+        case 'deal': return ((a.dealValue||0) - (b.dealValue||0)) * dir
+        case 'prob': return ((a.probability||0) - (b.probability||0)) * dir
+        case 'country': return s(a.country).localeCompare(s(b.country)) * dir
+        case 'activity': return (new Date(a.lastActivityDate||0).getTime() - new Date(b.lastActivityDate||0).getTime()) * dir
+        case 'assignment': {
+          const aa = latestAssignmentForClient(a.id)
+          const bb = latestAssignmentForClient(b.id)
+          return s(aa).localeCompare(s(bb)) * dir
+        }
+        case 'follow': {
+          const fa = latestCutoffForClient(a.id)
+          const fb = latestCutoffForClient(b.id)
+          const ta = fa ? new Date(fa).getTime() : -Infinity
+          const tb = fb ? new Date(fb).getTime() : -Infinity
+          if(ta === tb) return 0
+          return (ta < tb ? -1 : 1) * dir
+        }
+      }
+    })
+    return copy
+  }, [rows, sortBy, sortDir, team, activities])
+
+  // derive visibleRows based on page size
+  const visibleRows = pageSize === 'All' ? sortedRows : sortedRows.slice(0, pageSize)
 
   function latestAssignmentForClient(clientId: string){
     const acts = activities.filter(a=>a.clientId === clientId && a.assignment).sort((a,b)=> new Date(b.datetime).getTime() - new Date(a.datetime).getTime())
     return acts.length ? acts[0].assignment : '-'
+  }
+
+  // Latest cut-off date from Activities for a given client (most recent by datetime)
+  function latestCutoffForClient(clientId: string): string | null {
+    const list = activities
+      .filter(a => a.clientId === clientId && !!a.cut_off_date)
+      .sort((a,b) => new Date(b.datetime).getTime() - new Date(a.datetime).getTime())
+    if(!list.length) return null
+    const v = list[0].cut_off_date as (string | null | undefined)
+    return v ? String(v) : null
   }
 
   const emptyForm = (): Partial<Client> => ({
@@ -337,6 +411,7 @@ export default function ClientsPage(){
       services_interested: normalizedServices.join(', '),
       contact_name: form.contactName,
       contact_email: form.contactEmail,
+      // next_followup will be overridden below (edit mode) to mirror latest Activity cut-off
       next_followup: toSqlDate(form.nextFollowUpDate),
       last_activity_date: toSqlDate(form.lastActivityDate || new Date().toISOString()),
       next_meeting_datetime: toSqlDateTime(form.nextMeetingDateTime),
@@ -348,6 +423,18 @@ export default function ClientsPage(){
         const idToUpdateRaw = (selectedEditId || (editing && editing.id) || (formAny && formAny.id)) as string | undefined
         const idToUpdate = idToUpdateRaw ? String(idToUpdateRaw) : undefined
         if(!idToUpdate){ setErrors({ general: 'No record selected to edit.' }); return }
+        // Ensure DB next_followup mirrors the latest Activity cut-off for this client
+        try{
+          const latestCut = latestCutoffForClient(idToUpdate)
+          if(latestCut){
+            const cutDateOnly = new Date(latestCut).toISOString().slice(0,10)
+            payload.next_followup = cutDateOnly
+            payload.nextFollowUpDate = latestCut
+          } else {
+            payload.next_followup = null
+            payload.nextFollowUpDate = null
+          }
+        }catch(_){ /* ignore */ }
         const updated = await updateClient(String(idToUpdate), payload as Partial<Client>)
         // if an assignment was set, create an activity for it
         if(updated && formAny && (formAny.assignment || formAny.nextMeetingDateTime)){
@@ -436,6 +523,15 @@ export default function ClientsPage(){
                 <option value="All">New Client</option>
                 <option value="New">New (30d)</option>
               </select>
+              <button
+                type="button"
+                onClick={()=>{ setSearch(''); setFilterStatus('All'); setFilterOwner('All'); setFilterNewClient('All') }}
+                className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800 ml-1"
+                title="Reset filters"
+                aria-label="Reset filters"
+              >
+                <span>Reset</span>
+              </button>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -459,21 +555,21 @@ export default function ClientsPage(){
         <table className={`w-full table-auto ${showDetails ? 'text-xs' : ''}`}>
           <thead className="bg-slate-50">
             <tr className={`text-left ${showDetails ? 'text-[11px] text-slate-600 font-semibold tracking-wide uppercase' : 'text-sm text-slate-600 font-semibold tracking-wide uppercase'}`}>
-              <th className="px-2 py-2 border-b border-slate-200">Client</th>
-              <th className="px-2 py-2 border-b border-slate-200">Status</th>
-              <th className="px-2 py-2 border-b border-slate-200">Stage</th>
+              <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('client')}>Client {sortBy==='client' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+              <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('status')}>Status {sortBy==='status' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+              <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('stage')}>Stage {sortBy==='stage' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
               {showDetails ? (
                 <>
-                  <th className="px-2 py-2 border-b border-slate-200">Owner</th>
-                  <th className="px-2 py-2 border-b border-slate-200">Industry</th>
-                  <th className="px-2 py-2 border-b border-slate-200 text-right">Deal</th>
-                  <th className="px-2 py-2 border-b border-slate-200 text-right">Prob</th>
+                  <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('owner')}>Owner {sortBy==='owner' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+                  <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('industry')}>Industry {sortBy==='industry' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+                  <th className="px-2 py-2 border-b border-slate-200 text-right"><button className="hover:text-slate-900" onClick={()=>toggleSort('deal')}>Deal {sortBy==='deal' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+                  <th className="px-2 py-2 border-b border-slate-200 text-right"><button className="hover:text-slate-900" onClick={()=>toggleSort('prob')}>Prob {sortBy==='prob' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
                   <th className="px-2 py-2 border-b border-slate-200">Contact</th>
                   <th className="px-2 py-2 border-b border-slate-200" style={{ minWidth: 160 }}>Email</th>
-                  <th className="px-2 py-2 border-b border-slate-200">Country</th>
-                  <th className="px-2 py-2 border-b border-slate-200">Activity</th>
-                  <th className="px-2 py-2 border-b border-slate-200">Assignment</th>
-                  <th className="px-2 py-2 border-b border-slate-200">Follow</th>
+                  <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('country')}>Country {sortBy==='country' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+                  <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('activity')}>Activity {sortBy==='activity' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+                  <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('assignment')}>Assignment {sortBy==='assignment' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
+                  <th className="px-2 py-2 border-b border-slate-200"><button className="hover:text-slate-900" onClick={()=>toggleSort('follow')}>Follow {sortBy==='follow' ? (sortDir==='asc'?'▲':'▼') : ''}</button></th>
                   {/* Health column removed */}
                   <th className="px-2 py-2 border-b border-slate-200"></th>
                 </>
@@ -552,15 +648,17 @@ export default function ClientsPage(){
                     <td className="px-2 py-1">{c.country || '-'}</td>
                     <td className="px-2 py-1">{formatDate(c.lastActivityDate)}</td>
                     <td className="px-2 py-1">{latestAssignmentForClient(c.id)}</td>
-                    <td className="px-2 py-1">{formatDate(c.nextFollowUpDate ?? null)}</td>
+                    <td className="px-2 py-1">{formatDate(latestCutoffForClient(c.id) ?? null)}</td>
                     {/* Health cell removed */}
                     <td className="px-2 py-1 whitespace-nowrap">
                       <button className="inline-flex items-center justify-center w-7 h-7 rounded hover:bg-amber-50 text-amber-600 mr-1" title="Edit Client" aria-label="Edit Client" onClick={(e)=>{ e.stopPropagation(); openEditFromRow(c) }}>
                         <Pencil size={16} />
                       </button>
-                      <button className="inline-flex items-center justify-center w-7 h-7 rounded hover:bg-rose-50 text-rose-600" title="Delete Client" aria-label="Delete Client" onClick={(e)=>{ e.stopPropagation(); if(confirm(`Delete ${c.clientName}?`)) deleteClient(c.id) }}>
-                        <Trash2 size={16} />
-                      </button>
+                      {isPrivileged && (
+                        <button className="inline-flex items-center justify-center w-7 h-7 rounded hover:bg-rose-50 text-rose-600" title="Delete Client" aria-label="Delete Client" onClick={(e)=>{ e.stopPropagation(); if(confirm(`Delete ${c.clientName}?`)) deleteClient(c.id) }}>
+                          <Trash2 size={16} />
+                        </button>
+                      )}
                     </td>
                   </>
                 ) : (
@@ -758,7 +856,14 @@ export default function ClientsPage(){
                 </div>
                 <div className="md:col-span-1">
                   <label className="block text-sm text-slate-600 mb-2">Stage</label>
-                  <select onFocus={()=>setActiveField('Stage')} onBlur={()=>setActiveField(null)} className="w-full border p-2.5 rounded-lg text-sm" value={form.pipelineStage||'Discovery'} onChange={e=>setForm({...form, pipelineStage: e.target.value as any})}>
+                  <select
+                    onFocus={()=>setActiveField('Stage')}
+                    onBlur={()=>setActiveField(null)}
+                    className={`w-full border p-2.5 rounded-lg text-sm ${isUserLevel ? 'bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200' : ''}`}
+                    value={form.pipelineStage||'Discovery'}
+                    onChange={e=>setForm({...form, pipelineStage: e.target.value as any})}
+                    disabled={isUserLevel}
+                  >
                     <option>Discovery</option>
                     <option>Qualifying</option>
                     <option>Proposal Sent</option>
@@ -778,7 +883,7 @@ export default function ClientsPage(){
                   </select>
                 </div>
                 {/* Services Interested multi-select (placed next to Stage & Status) */}
-                <div className="md:col-span-1">
+                <div className="md:col-span-1" ref={servicesRef}>
                   <label className="block text-sm text-slate-600 mb-2">Services Interested*</label>
                   <div className="relative">
                     <button
@@ -915,7 +1020,21 @@ export default function ClientsPage(){
                 </div>
                 <div className="md:col-span-1">
                   <label className="block text-sm text-slate-600 mb-2">Next Follow-up</label>
-                  <input type="date" className="w-full border p-2.5 rounded-lg text-sm" value={toDateInputValue(form.nextFollowUpDate as string | null)} onChange={e=>setForm({...form, nextFollowUpDate: e.target.value? new Date(e.target.value).toISOString(): null})} />
+                  {/* Mirrors Activity Cut-off date (read-only to reflect activity source of truth) */}
+                  {(() => {
+                    const cid = String((form as any).id || selectedEditId || '')
+                    const cutoff = cid ? latestCutoffForClient(cid) : null
+                    return (
+                      <input
+                        type="date"
+                        className="w-full border p-2.5 rounded-lg text-sm bg-slate-100 text-slate-500 cursor-not-allowed"
+                        value={toDateInputValue(cutoff)}
+                        onChange={()=>{ /* read-only view; managed via Activities cut-off */ }}
+                        disabled
+                        title="This value mirrors the latest Activity Cut-off date for this client"
+                      />
+                    )
+                  })()}
                 </div>
 
                 <div className="md:col-span-1">

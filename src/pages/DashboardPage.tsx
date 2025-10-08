@@ -1,4 +1,5 @@
 import React from 'react'
+// removed reset icon per request
 import { DollarSign, CalendarDays, Briefcase, Users, Activity, ChevronDown } from 'lucide-react'
 import KPIStat from '../components/KPIStat'
 import ActivityItem from '../components/ActivityItem'
@@ -16,6 +17,16 @@ export default function DashboardPage(){
   const [filterMonth, setFilterMonth] = React.useState('') // YYYY-MM
   const kpis = useKPIs()
 
+  // Sorting state: Next Actions and BDM Performance
+  type NextSort = 'client'|'p'|'owner'|'assignment'|'cutoff'
+  const [nextSortBy, setNextSortBy] = React.useState<NextSort>('cutoff')
+  const [nextSortDir, setNextSortDir] = React.useState<'asc'|'desc'>('asc')
+  const toggleNextSort = (k: NextSort) => setNextSortBy(prev => { if(prev===k){ setNextSortDir(d=>d==='asc'?'desc':'asc'); return prev } setNextSortDir('asc'); return k })
+  type BdmSort = 'bdm'|'deals'|'pipeline'|'missing'|'activity'
+  const [bdmSortBy, setBdmSortBy] = React.useState<BdmSort>('pipeline')
+  const [bdmSortDir, setBdmSortDir] = React.useState<'asc'|'desc'>('desc')
+  const toggleBdmSort = (k: BdmSort) => setBdmSortBy(prev => { if(prev===k){ setBdmSortDir(d=>d==='asc'?'desc':'asc'); return prev } setBdmSortDir(k==='bdm'?'asc':'desc'); return k })
+
   // Helper: format numbers as currency with automatic K/M suffix, uppercase, 1 decimal, rounded up
   const formatShortCurrency = React.useCallback((value: number) => {
     const v = Number(value || 0)
@@ -32,6 +43,24 @@ export default function DashboardPage(){
     // For sub-1k, round up to nearest integer
     const rounded = Math.ceil(abs)
     return `${sign}$${rounded.toLocaleString()}`
+  }, [])
+
+  // Activity scores from DB view (v_usage_activity)
+  const [activityScores, setActivityScores] = React.useState<any[]>([])
+  React.useEffect(() => {
+    let aborted = false
+    ;(async () => {
+      try{
+        const res = await fetch('/api/metrics/activity-scores')
+        if(!res.ok) return
+        const json = await res.json().catch(()=>null)
+        const rows = json && Array.isArray(json.data) ? json.data : []
+        if(!aborted) setActivityScores(rows)
+      }catch{
+        // ignore
+      }
+    })()
+    return () => { aborted = true }
   }, [])
 
   // Build the allowed owner options based on role + market rules
@@ -55,6 +84,25 @@ export default function DashboardPage(){
     // User: self only
     return team.filter(t => String(t.id) === String(currentUser.id))
   }, [team, currentUser, isOwner, isAdmin])
+
+  // Select options interdependence: restrict owners by selected client (if any)
+  const ownersForSelect = React.useMemo(() => {
+    if(filterClient){
+      const cli = clients.find(c => String(c.id) === String(filterClient))
+      if(cli){
+        return teamForSelect.filter(t => String(t.id) === String(cli.ownerId))
+      }
+    }
+    return teamForSelect
+  }, [teamForSelect, clients, filterClient])
+
+  // Client options interdependence: restrict by selected owner (if any)
+  const clientsForSelect = React.useMemo(() => {
+    if(filterOwner){
+      return (isPrivileged ? clients : clients.filter(c => c.ownerId === currentUser.id)).filter(c => String(c.ownerId) === String(filterOwner))
+    }
+    return (isPrivileged ? clients : clients.filter(c => c.ownerId === currentUser.id))
+  }, [clients, filterOwner, isPrivileged, currentUser.id])
 
   // Compute role/market-scoped owner ids for notification counts
   const allowedOwnerIds = React.useMemo(() => new Set(teamForSelect.map(t => String(t.id))), [teamForSelect])
@@ -161,23 +209,100 @@ export default function DashboardPage(){
     const r = String((tm as any).role||'').toLowerCase()
     return (r === 'bdm' || r === 'user') && allowedOwnerIds.has(String(tm.id))
   })
+  // Helper: month bounds for selected filter (or current month)
+  function getMonthBounds(): { start: Date; end: Date; label: string }{
+    let y: number, m: number
+    if(filterMonth){
+      const parts = filterMonth.split('-').map(Number)
+      y = parts[0]; m = parts[1]
+    } else {
+      const now = new Date()
+      y = now.getFullYear(); m = now.getMonth() + 1
+    }
+    const start = new Date(y, m-1, 1, 0,0,0,0)
+    const end = new Date(y, m, 0, 23,59,59,999)
+    const label = `${start.toLocaleString(undefined, { month: 'short' })} ${y}`
+    return { start, end, label }
+  }
+  // Determine if a client missed at least one cut-off within the month for a given owner
+  function clientMissedCutoffThisMonth(clientId: string, ownerId: string){
+    const { start, end } = getMonthBounds()
+    // candidate cutoffs in month for this client (ignore activity owner mismatches; tie to client owner)
+    const cutoffs = activities.filter(a => (
+      String(a.clientId) === String(clientId)
+      && !!a.cut_off_date
+    )).map(a => ({ cutoff: new Date(a.cut_off_date as any), act: a }))
+      .filter(x => !Number.isNaN(x.cutoff.getTime()) && x.cutoff >= start && x.cutoff <= end)
+
+    // Fallback: if no activities with cut-off but client has nextFollowUpDate within month, use that
+    if(cutoffs.length === 0){
+      const cli = clients.find(c => c.id === clientId)
+      if(cli && cli.nextFollowUpDate){
+        const d = new Date(cli.nextFollowUpDate)
+        if(!Number.isNaN(d.getTime()) && d >= start && d <= end){
+          cutoffs.push({ cutoff: d, act: { ...(null as any) } })
+        }
+      }
+    }
+
+    if(cutoffs.length === 0) return false
+
+    // Evaluate each cutoff: missed if passed by end-of-month (or now if earlier) without a completed/canceled activity by the cutoff date
+    const horizon = new Date(Math.min(Date.now(), end.getTime()))
+    for(const item of cutoffs){
+      const cutoff = item.cutoff
+      if(cutoff.getTime() > horizon.getTime()) continue // not due yet -> not missed
+      // If any activity for this client was Completed/Canceled on or before the cutoff, consider met
+      const satisfied = activities.some(a => (
+        String(a.clientId) === String(clientId)
+        && (a.status === 'Completed' || a.status === 'Canceled')
+        && new Date(a.datetime).getTime() <= cutoff.getTime()
+      ))
+      if(!satisfied){
+        return true // at least one cutoff missed
+      }
+    }
+    return false
+  }
   const bdmPerf = bdmVisible.map(t => {
     const myClients = filteredClients.filter(c=> c.ownerId === t.id)
     const deals = myClients.filter(c=> (c.dealValue||0) > 0).length
     const value = myClients.reduce((s,c)=> s + Number(c.dealValue || 0), 0)
-    const missingFollowups = myClients.filter(c=> !c.nextFollowUpDate).length
+    // Count of distinct clients with at least one missed cutoff in the month
+    const missingFollowups = myClients.reduce((count, c) => count + (clientMissedCutoffThisMonth(c.id, String(t.id)) ? 1 : 0), 0)
     return { ...t, deals, value, missingFollowups }
   }) as any[]
   // Sort by pipeline value (desc), then by # deals (desc); derive visible slice (top 5 by default)
   const [showAllBDM, setShowAllBDM] = React.useState(false)
   const bdmPerfSorted = React.useMemo(() => {
-    return [...bdmPerf].sort((a:any,b:any) => {
-      const byValue = Number(b.value||0) - Number(a.value||0)
-      if(byValue !== 0) return byValue
-      return Number(b.deals||0) - Number(a.deals||0)
+    const arr = [...bdmPerf]
+    const dir = bdmSortDir==='asc'?1:-1
+    const s = (v:any)=> (v==null?'':String(v)).toLowerCase()
+    arr.sort((a:any,b:any)=>{
+      switch(bdmSortBy){
+        case 'bdm': return s(a.name).localeCompare(s(b.name)) * dir
+        case 'deals': return ((a.deals||0) - (b.deals||0)) * dir
+        case 'pipeline': return ((a.value||0) - (b.value||0)) * dir
+        case 'missing': return ((a.missingFollowups||0) - (b.missingFollowups||0)) * dir
+        case 'activity': {
+          const sa = activityStatusForUser(String(a.id))
+          const sb = activityStatusForUser(String(b.id))
+          return s(sa.label).localeCompare(s(sb.label)) * dir
+        }
+        default: return 0
+      }
     })
-  }, [bdmPerf])
+    return arr
+  }, [bdmPerf, bdmSortBy, bdmSortDir])
   const bdmPerfVisible = React.useMemo(() => showAllBDM ? bdmPerfSorted : bdmPerfSorted.slice(0,4), [showAllBDM, bdmPerfSorted])
+  // Map activity score -> status
+  function activityStatusForUser(userId: string){
+    const row = activityScores.find(r => String(r.user_id) === String(userId))
+    const score = Number(row?.activity_score ?? 0)
+    if(score >= 25) return { icon: '🟢', label: 'Active', color: 'text-emerald-600' }
+    if(score >= 15) return { icon: '🟡', label: 'Moderate', color: 'text-amber-500' }
+    return { icon: '🔴', label: 'Inactive', color: 'text-rose-600' }
+  }
 
   // next actions (upcoming activities) - one row per client: pick the nearest upcoming assigned action per client
   const upcomingAll = React.useMemo(() => {
@@ -195,13 +320,50 @@ export default function DashboardPage(){
       latestPerClient.push(arr[0])
     })
 
-    // select assigned/upcoming and not-completed
-    const assigned = latestPerClient.filter(a => (a.assignment !== undefined && String(a.assignment).trim() !== '') && a.status !== 'Completed')
+    // select assigned/upcoming and not-completed, not-canceled
+    const assigned = latestPerClient.filter(a => (
+      a.assignment !== undefined && String(a.assignment).trim() !== ''
+    ) && (a.status !== 'Completed' && a.status !== 'Canceled'))
     const dateKey = (a: any) => a.cut_off_date ? new Date(a.cut_off_date).getTime() : new Date(a.datetime).getTime()
-    return assigned.sort((a,b) => dateKey(a) - dateKey(b))
+    const sorted = assigned.sort((a,b) => dateKey(a) - dateKey(b))
+    return sorted
   }, [filteredActivities])
+  const upcomingSorted = React.useMemo(() => {
+    const arr = [...upcomingAll]
+    const dir = nextSortDir==='asc'?1:-1
+    const s = (v:any)=> (v==null?'':String(v)).toLowerCase()
+    arr.sort((a:any,b:any)=>{
+      switch(nextSortBy){
+        case 'client': {
+          const ac = clients.find(c=>c.id===a.clientId)?.clientName || ''
+          const bc = clients.find(c=>c.id===b.clientId)?.clientName || ''
+          return s(ac).localeCompare(s(bc)) * dir
+        }
+        case 'p': {
+          const arrA = activities.filter(x=>String(x.clientId)===String(a.clientId))
+          const arrB = activities.filter(x=>String(x.clientId)===String(b.clientId))
+          const pa = arrA.filter(x=>String(x.status)==='Postponed').length
+          const pb = arrB.filter(x=>String(x.status)==='Postponed').length
+          return (pa - pb) * dir
+        }
+        case 'owner': {
+          const ao = team.find(t=>String(t.id)===String(a.ownerId))?.name || String(a.ownerId||'')
+          const bo = team.find(t=>String(t.id)===String(b.ownerId))?.name || String(b.ownerId||'')
+          return s(ao).localeCompare(s(bo)) * dir
+        }
+        case 'assignment': return s(a.assignment).localeCompare(s(b.assignment)) * dir
+        case 'cutoff': default: {
+          const ta = a.cut_off_date ? new Date(a.cut_off_date).getTime() : new Date(a.datetime).getTime()
+          const tb = b.cut_off_date ? new Date(b.cut_off_date).getTime() : new Date(b.datetime).getTime()
+          if(ta===tb) return 0
+          return (ta < tb ? -1 : 1) * dir
+        }
+      }
+    })
+    return arr
+  }, [upcomingAll, nextSortBy, nextSortDir, clients, team, activities])
   const [showAllNext, setShowAllNext] = React.useState(false)
-  const upcomingVisible = React.useMemo(() => showAllNext ? upcomingAll : upcomingAll.slice(0,4), [showAllNext, upcomingAll])
+  const upcomingVisible = React.useMemo(() => showAllNext ? upcomingSorted : upcomingSorted.slice(0,4), [showAllNext, upcomingSorted])
 
   // (Removed Overdue & Missing Follow-ups card)
 
@@ -261,19 +423,18 @@ export default function DashboardPage(){
     return { added, score }
   }
   function activityRecencyForOwner(ownerId: string){
-    // consider activities for owner; respect client filter
-    const acts = activities.filter(a => String(a.ownerId) === String(ownerId) && (!filterClient || String(a.clientId) === String(filterClient)))
-    let lastAt: Date | null = null
-    for(const a of acts){
-      const d1 = a.createdAt ? new Date(a.createdAt) : null
-      const d2 = a.datetime ? new Date(a.datetime) : null
-      const pick = d1 && !isNaN(d1.getTime()) ? d1 : (d2 && !isNaN(d2.getTime()) ? d2 : null)
-      if(pick && (!lastAt || pick > lastAt)) lastAt = pick
-    }
-    const daysSince = lastAt ? Math.max(0, Math.floor((nowTsMs - lastAt.getTime()) / (24*60*60*1000))) : 9999
-    const capped = Math.min(daysSince, 30)
-    const value30 = 30 - capped // 30 at best (today), 0 when >=30 days
+    // Use DB metrics: activity_score (0..30), last_activity_date
+    const row = activityScores.find(r => String(r.user_id) === String(ownerId))
+    const rawScore = Number(row?.activity_score ?? 0)
+    const value30 = Math.max(0, Math.min(30, Math.round(rawScore)))
     const score = Math.round((value30 / 30) * 100)
+    let daysSince = 9999
+    if(row?.last_activity_date){
+      const d = new Date(row.last_activity_date)
+      if(!Number.isNaN(d.getTime())){
+        daysSince = Math.max(0, Math.floor((Date.now() - d.getTime()) / (24*60*60*1000)))
+      }
+    }
     return { daysSince, score, value30 }
   }
   // team-level aggregates (visible BDMs)
@@ -291,9 +452,8 @@ export default function DashboardPage(){
     if(ids.length === 0) return { avgDays: 0, score: 0, avgValue30: 0 }
     const per = ids.map(oid => activityRecencyForOwner(oid))
     const score = Math.round(per.reduce((s,x)=> s + x.score, 0) / ids.length)
-    // average days; treat missing (9999) as 30 (worst)
     const avgDays = Math.round(per.reduce((s,x)=> s + Math.min(x.daysSince, 30), 0) / ids.length)
-    const avgValue30 = per.reduce((s,x)=> s + x.value30, 0) / ids.length
+    const avgValue30 = Math.round(per.reduce((s,x)=> s + x.value30, 0) / ids.length)
     return { avgDays, score, avgValue30 }
   }
   // choose target owners for gauges
@@ -312,27 +472,48 @@ export default function DashboardPage(){
           <div className="flex items-center gap-2">
             <select
               value={filterOwner}
-              onChange={e=>setFilterOwner(e.target.value)}
+              onChange={e=>{
+                const v = e.target.value
+                setFilterOwner(v)
+                // If a client is selected but doesn't belong to this owner, clear client
+                if(filterClient){
+                  const cli = clients.find(c => String(c.id) === String(filterClient))
+                  if(cli && String(cli.ownerId) !== String(v)) setFilterClient('')
+                }
+              }}
               className="border rounded px-2 py-1 text-sm bg-white"
             >
               {isPrivileged ? (
                 <option value="">{isOwner ? 'All owners' : 'All team'}</option>
               ) : null}
-              {teamForSelect.map(t => (
+              {ownersForSelect.map(t => (
                 <option key={t.id} value={t.id}>{t.name}</option>
               ))}
             </select>
             <select
               value={filterClient}
-              onChange={e=>setFilterClient(e.target.value)}
+              onChange={e=>{
+                const v = e.target.value
+                setFilterClient(v)
+                if(v){
+                  const cli = clients.find(c => String(c.id) === String(v))
+                  if(cli) setFilterOwner(String(cli.ownerId))
+                }
+              }}
               className="border rounded px-2 py-1 text-sm bg-white"
             >
               {isPrivileged ? <option value="">All clients</option> : null}
-              {(isPrivileged ? clients : clients.filter(c => c.ownerId === currentUser.id))
-                .map(c => <option key={c.id} value={c.id}>{c.clientName}</option>)}
+              {clientsForSelect.map(c => <option key={c.id} value={c.id}>{c.clientName}</option>)}
             </select>
             <input type="month" value={filterMonth} onChange={e=>setFilterMonth(e.target.value)} className="border rounded px-2 py-1 text-sm bg-white" />
-            <button onClick={() => { setFilterOwner(''); setFilterClient(''); setFilterMonth('') }} className="text-sm text-slate-500 hover:text-slate-700">Reset</button>
+            <button
+              onClick={() => { setFilterOwner(''); setFilterClient(''); setFilterMonth('') }}
+              className="inline-flex items-center gap-2 text-sm text-slate-600 hover:text-slate-800"
+              title="Reset filters"
+              aria-label="Reset filters"
+            >
+              <span>Reset</span>
+            </button>
           </div>
         </div>
         {/* Duplicate avatar removed; Shell header already displays user avatar and logout */}
@@ -467,25 +648,97 @@ export default function DashboardPage(){
                 <ChevronDown size={14} className={`text-slate-400 transition-transform ${showAllBDM ? 'rotate-180' : ''}`} />
               </button>
             </div>
-            <div className="overflow-auto">
+            <div>
               <table className="w-full text-xs table-auto">
                 <thead>
                   <tr className="text-left text-[11px] text-slate-500">
-                    <th className="pb-1">BDM</th>
-                    <th className="pb-1"># Deals</th>
-                    <th className="pb-1">Pipeline</th>
-                    <th className="pb-1">Missing FU</th>
+                    <th className="pb-1">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleBdmSort('bdm')}>BDM {bdmSortBy==='bdm' ? (bdmSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-64 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Business Development Manager. Click a name to filter by that person.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="pb-1">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleBdmSort('deals')}># Deals {bdmSortBy==='deals' ? (bdmSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-64 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Number of deals (clients with a positive Deal value) within the current filters.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="pb-1">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleBdmSort('pipeline')}>Pipeline {bdmSortBy==='pipeline' ? (bdmSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-64 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Total pipeline value: the sum of Deal values across filtered clients for the BDM.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="pb-1">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleBdmSort('missing')}>Missing FU {bdmSortBy==='missing' ? (bdmSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-72 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Count of distinct clients with a cut-off in the selected month that passed without a Completed/Canceled activity by the deadline.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="pb-1">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleBdmSort('activity')}>Activity {bdmSortBy==='activity' ? (bdmSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-72 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Engagement status based on activity score (🟢 Active, 🟡 Moderate, 🔴 Inactive).
+                        </span>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {bdmPerfVisible.map(b=> (
+                  {bdmPerfVisible.map(b=> {
+                    const status = activityStatusForUser(String(b.id))
+                    const missing = Number(b.missingFollowups || 0)
+                    return (
                     <tr key={b.id} className="hover:bg-slate-50">
-                      <td className="py-1">{b.name}</td>
+                      <td className="py-1">
+                        <button
+                          className="text-slate-700 hover:text-sky-700 underline underline-offset-2"
+                          title="Filter by this BDM"
+                          onClick={() => setFilterOwner(String(b.id))}
+                        >
+                          {b.name}
+                        </button>
+                      </td>
                       <td className="py-1">{b.deals}</td>
-                      <td className="py-1">${(b.value||0).toLocaleString()}</td>
-                      <td className="py-1">{b.missingFollowups}</td>
+                      <td className="py-1">{formatShortCurrency(Number(b.value||0))}</td>
+                      <td className="py-1">
+                        {(() => {
+                          const n = missing
+                          // Color ramp 0..4
+                          let cls = 'bg-slate-100 text-slate-600'
+                          if(n === 1) cls = 'bg-amber-100 text-amber-700'
+                          else if(n === 2) cls = 'bg-orange-200 text-orange-800'
+                          else if(n === 3) cls = 'bg-rose-300 text-rose-900'
+                          else if(n >= 4) cls = 'bg-rose-600 text-white'
+                          const { label } = getMonthBounds()
+                          return (
+                            <span className={`relative inline-flex items-center px-2 py-0.5 rounded-full text-[11px] group ${cls}`}>
+                              {n}
+                              <span className="absolute left-0 top-full mt-1 z-10 w-64 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                                {`Missed cut-offs in ${label}: ${n}. Count of distinct clients with a cut-off date in the month that passed without completion by the deadline.`}
+                              </span>
+                            </span>
+                          )
+                        })()}
+                      </td>
+                      <td className="py-1">
+                        <span className="inline-flex items-center gap-1 text-sm">
+                          <span className="text-base" aria-hidden>{status.icon}</span>
+                          <span className={`${status.color}`}>{status.label}</span>
+                        </span>
+                      </td>
                     </tr>
-                  ))}
+                  )})}
                 </tbody>
               </table>
             </div>
@@ -513,7 +766,7 @@ export default function DashboardPage(){
               </div>
             </div>
             <div className="text-sm text-slate-500 mb-3">{isOwner ? '' : isAdmin ? 'Upcoming activities for your team' : 'Your upcoming activities'}</div>
-            <div className="max-h-96 overflow-auto">
+            <div>
               <table className="w-full text-sm table-fixed">
                 <colgroup>
                   <col style={{ width: '17%' }} />
@@ -524,11 +777,46 @@ export default function DashboardPage(){
                 </colgroup>
                 <thead>
                   <tr className="text-left text-xs text-slate-400">
-                    <th className="pl-0 align-top">Client</th>
-                    <th className="text-center align-top">P</th>
-                    <th className="pl-4 align-top">Owner</th>
-                    <th className="align-top">Assignment</th>
-                    <th className="text-right pr-3 align-top">Cut-off</th>
+                    <th className="pl-0 align-top">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleNextSort('client')}>Client {nextSortBy==='client' ? (nextSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-56 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Client name associated with the action.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="text-center align-top">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleNextSort('p')}>P {nextSortBy==='p' ? (nextSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-1/2 -translate-x-1/2 top-full mt-1 z-10 w-64 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none text-left">
+                          Postponements count for this client (cumulative across activity history).
+                        </span>
+                      </span>
+                    </th>
+                    <th className="pl-4 align-top">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleNextSort('owner')}>Owner {nextSortBy==='owner' ? (nextSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-64 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          Client owner responsible for the account.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="align-top">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleNextSort('assignment')}>Assignment {nextSortBy==='assignment' ? (nextSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute left-0 top-full mt-1 z-10 w-72 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none">
+                          The next planned action to execute for this client.
+                        </span>
+                      </span>
+                    </th>
+                    <th className="text-right pr-3 align-top">
+                      <span className="relative inline-block group cursor-default">
+                        <button className="hover:text-slate-700" onClick={()=>toggleNextSort('cutoff')}>Cut-off {nextSortBy==='cutoff' ? (nextSortDir==='asc'?'▲':'▼') : ''}</button>
+                        <span className="absolute right-0 top-full mt-1 z-10 w-72 px-3 py-2 rounded-md bg-white text-black text-xs font-normal leading-snug shadow-lg ring-1 ring-slate-200 opacity-0 group-hover:opacity-100 pointer-events-none text-left">
+                          Deadline date for the next action. Marked Late if the date has passed without completion.
+                        </span>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -615,14 +903,14 @@ export default function DashboardPage(){
                       title={`Clients Added (30d)`}
                       score={ca.score}
                       valueText={`6`}
-                      subtitle={`Target 6/mo · Score ${ca.score}%`}
+                      subtitle={`${ca.added} of 6 · Target mo · ${ca.score}%`}
                       compact
                     />
                     <GaugeCard
                       title={`Activity Recency`}
                       score={ar.score}
-                      valueText={`30`}
-                      subtitle={`Last activity: ${ar.daysSince === 9999 ? 'n/a' : `${ar.daysSince} days ago`}`}
+                      valueText={`${Math.max(0, Math.min(30, ar.value30))}`}
+                      subtitle={`Engagement score: ${Math.max(0, Math.min(30, ar.value30))} of 30`}
                       compact
                     />
                   </>
@@ -642,8 +930,8 @@ export default function DashboardPage(){
                     <GaugeCard
                       title={`Activity Recency`}
                       score={arAvg.score}
-                      valueText={`30`}
-                      subtitle={`Avg last activity: ${arAvg.avgDays} days`}
+                      valueText={`${Math.max(0, Math.min(30, arAvg.avgValue30))}`}
+                      subtitle={`Avg last activity: ${arAvg.avgDays} days · Avg score (max 30)`}
                       compact
                     />
                   </>
