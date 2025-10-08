@@ -29,5 +29,7 @@ RUN npm install -g serve@14.1.2 --no-audit --no-fund
 
 EXPOSE 8080
 # For Docker deployments on Railway, bind to the fixed container port declared above.
-CMD ["sh", "-c", "serve -s dist -l 0.0.0.0:8080"]
+	# Default to Railway's $PORT; fallback to 8080. Use explicit tcp:// scheme for serve's --listen.
+	# Use an explicit shell variable assignment first to avoid empty expansion edge-cases.
+	CMD ["sh", "-c", "PORT=\"${PORT:-8080}\"; echo Serving on tcp://0.0.0.0:${PORT}; serve -s dist --listen tcp://0.0.0.0:${PORT}"]
 
