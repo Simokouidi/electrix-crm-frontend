@@ -35,6 +35,37 @@ if (typeof document !== 'undefined') {
     preload.setAttribute('fetchpriority', 'high')
     document.head.appendChild(preload)
   } catch {}
+
+  // Preload all app images on initial load by injecting <link rel="preload"> tags
+  try {
+    const imageUrls: string[] = [
+      new URL('./Images/Background.png', import.meta.url).href,
+      new URL('./Images/Logo_copy2.png', import.meta.url).href,
+      new URL('./Images/reset-arrows.svg', import.meta.url).href,
+      new URL('./Images/(unassigned).png', import.meta.url).href,
+      new URL('./Images/Call client.png', import.meta.url).href,
+      new URL('./Images/Email client.png', import.meta.url).href,
+      new URL('./Images/Follow-up.png', import.meta.url).href,
+      new URL('./Images/Prepare contract.png', import.meta.url).href,
+      new URL('./Images/Schedule meeting.png', import.meta.url).href,
+      new URL('./Images/Send proposal.png', import.meta.url).href,
+    ]
+
+    const ensurePreload = (href: string) => {
+      if (!href) return
+      // Avoid duplicates
+      const exists = document.querySelector(`link[rel="preload"][href="${href}"]`)
+      if (exists) return
+      const l = document.createElement('link') as HTMLLinkElement
+      l.rel = 'preload'
+      l.setAttribute('as', 'image')
+      l.href = href
+      l.setAttribute('fetchpriority', 'high')
+      document.head.appendChild(l)
+    }
+
+    imageUrls.forEach(u => { try { ensurePreload(u) } catch {} })
+  } catch {}
 }
 
 const container = document.getElementById('root')
