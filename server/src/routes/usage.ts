@@ -4,6 +4,39 @@ import { getPool } from '../db'
 
 const router = Router()
 
+// Resolve a safe table name for usage events. Prefer `user_usage` (not reserved),
+// fall back to legacy reserved name `usage` if it already exists and cannot be renamed.
+async function resolveUsageTable(pool: any): Promise<string> {
+  const [dbRows]: any = await pool.query('SELECT DATABASE() AS db')
+  const dbName = (Array.isArray(dbRows) && dbRows.length ? String(dbRows[0].db || dbRows[0].DB || '') : '').trim() || 'railway'
+  const safe = `\`${dbName}\`.\`user_usage\``
+  const legacy = `\`${dbName}\`.\`usage\``
+  try{
+    const [tbls]: any = await pool.query(
+      "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME IN ('user_usage','usage')"
+    )
+    const names = new Set((Array.isArray(tbls) ? tbls : []).map((r:any)=>String(r.TABLE_NAME)))
+    const hasSafe = names.has('user_usage')
+    const hasLegacy = names.has('usage')
+    if(hasSafe){ return safe }
+    if(hasLegacy){
+      // Try to rename legacy reserved table to safe name
+      try{
+        await pool.query('RENAME TABLE `usage` TO `user_usage`')
+        return safe
+      }catch{
+        // No privileges or still in use — keep using legacy but fully quoted
+        return legacy
+      }
+    }
+    // Neither exists — we will create the safe one
+    return safe
+  }catch{
+    // As a last resort, use the safe name; creation will follow
+    return safe
+  }
+}
+
 router.post('/', async (req: Request, res: Response) => {
   try{
     const pool = getPool(req)
@@ -17,10 +50,8 @@ router.post('/', async (req: Request, res: Response) => {
     const detailsStr = typeof activity_details === 'string' ? activity_details : JSON.stringify(activity_details ?? {})
     const seconds = Number.isFinite(Number(time_spent_seconds)) ? Number(time_spent_seconds) : null
 
-    // Determine current database name and ensure the usage table exists in that schema
-    const [dbRows]: any = await pool.query('SELECT DATABASE() AS db')
-    const dbName = (Array.isArray(dbRows) && dbRows.length ? String(dbRows[0].db || dbRows[0].DB || '') : '').trim() || 'railway'
-    const fqTable = `\`${dbName}\`.\`usage\``
+  // Determine target table (prefer non-reserved name) and ensure it exists
+  const fqTable = await resolveUsageTable(pool)
 
     // Ensure table exists (id BIGINT AI PK, fields as specified)
     const createSql = `
@@ -66,9 +97,7 @@ router.get('/recent', async (req: Request, res: Response) => {
   try{
     const pool = getPool(req)
     if(!pool) return res.status(503).json({ success: false, error: 'DB unavailable' })
-    const [dbRows]: any = await pool.query('SELECT DATABASE() AS db')
-    const dbName = (Array.isArray(dbRows) && dbRows.length ? String(dbRows[0].db || dbRows[0].DB || '') : '').trim() || 'railway'
-    const fqTable = `\`${dbName}\`.\`usage\``
+    const fqTable = await resolveUsageTable(pool)
     const limit = Math.max(1, Math.min(100, Number(req.query.limit || 10)))
     const [rows]: any = await pool.query(`SELECT * FROM ${fqTable} ORDER BY id DESC LIMIT ?`, [limit])
     return res.json({ success: true, data: rows })
