@@ -28,5 +28,5 @@ COPY --from=build /app/package-lock.json ./package-lock.json
 RUN npm install -g serve@14.1.2 --no-audit --no-fund
 
 EXPOSE 8080
-# Default to Railway's $PORT; fallback to 8080. Bind to 0.0.0.0 for container networking.
-CMD ["sh", "-c", "serve -s dist -l 0.0.0.0:${PORT:-8080}"]
+# Default to Railway's $PORT; fallback to 8080. Use explicit tcp:// scheme for serve's --listen.
+CMD ["sh", "-c", "serve -s dist --listen tcp://0.0.0.0:${PORT:-8080}"]
