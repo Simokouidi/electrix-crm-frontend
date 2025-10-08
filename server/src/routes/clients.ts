@@ -37,66 +37,89 @@ export default function clientsRouter(io: IOServer) {
         const hdrId = (req.headers['x-user-id'] || req.headers['X-User-Id'] || '') as string
         const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
         if(!hdrId && !hdrEmail) return null
-        const [urows]: any = await db.query('SELECT id, email, role, team FROM users WHERE (id = ? AND ? <> "") OR (email = ? AND ? <> "") LIMIT 1', [hdrId, hdrId, hdrEmail, hdrEmail])
+        const schema:any[] | null = (req.app as any).schema?.users || null
+        const cols = Array.isArray(schema) ? schema.map((c:any)=> String(c.name)) : []
+        const hasCol = (n:string)=> cols.includes(n)
+        const teamCol = hasCol('team') ? 'team' : (hasCol('Team') ? 'Team' : (hasCol('market') ? 'market' : (hasCol('Market') ? 'Market' : null)))
+        let sql = `SELECT id, email, role, ${teamCol ? ('`'+teamCol+'`') : 'NULL'} AS team FROM users WHERE `
+        const params:any[] = []
+        if(hdrId){ sql += ' id = ?'; params.push(hdrId) }
+        if(hdrEmail){ sql += hdrId ? ' OR LOWER(email) = LOWER(?)' : ' LOWER(email) = LOWER(?)'; params.push(hdrEmail) }
+        sql += ' LIMIT 1'
+        const [urows]: any = await db.query(sql, params)
         return Array.isArray(urows) && urows.length ? urows[0] : null
       }catch{ return null }
     }
     try{
+      // Build user indices to resolve owners by id/email/name
+  const schemaUsers:any[] | null = (req.app as any).schema?.users || null
+  const colsU = Array.isArray(schemaUsers) ? schemaUsers.map((c:any)=> String(c.name)) : []
+  const hasColU = (n:string)=> colsU.includes(n)
+  const teamColU = hasColU('team') ? 'team' : (hasColU('Team') ? 'Team' : (hasColU('market') ? 'market' : (hasColU('Market') ? 'Market' : null)))
+  const [urows]: any = await db.query(`SELECT id, email, name, role, ${teamColU ? ('`'+teamColU+'`') : 'NULL'} AS team FROM users`)
+      const usersById = new Map<string, any>()
+      const usersByEmail = new Map<string, any>()
+      const usersByName = new Map<string, any>()
+      for(const u of (Array.isArray(urows) ? urows : [])){
+        const id = String(u.id)
+        const email = (u.email ? String(u.email).toLowerCase() : '')
+        const name = (u.name ? String(u.name).toLowerCase() : '')
+        usersById.set(id, u)
+        if(email) usersByEmail.set(email, u)
+        if(name) usersByName.set(name, u)
+      }
+
+      const resolveOwnerId = (raw: any): string => {
+        if(!raw || typeof raw !== 'object') return ''
+        const id1 = raw.owner_id ?? raw.ownerId
+        if(id1 !== undefined && id1 !== null && String(id1) !== '') return String(id1)
+        const email = (raw.owner_email ?? raw.ownerEmail ?? '').toString().toLowerCase()
+        if(email && usersByEmail.has(email)) return String(usersByEmail.get(email).id)
+        const name = (raw.Owner ?? raw.owner ?? '').toString().toLowerCase()
+        if(name && usersByName.has(name)) return String(usersByName.get(name).id)
+        return ''
+      }
+
       let mapped = Array.isArray(rows) ? (rows as any[]).map(r => {
         const m = normalizeRow(r)
         if(m && (m.id === undefined || m.id === null) && r && r[pkCol] !== undefined && r[pkCol] !== null){
           m.id = String(r[pkCol])
         }
+        const oid = resolveOwnerId({ ...r, ...m })
+        if(oid) (m as any).ownerId = oid
         return m
       }) : rows
+
       const auth = await getAuthUser()
       if(auth && Array.isArray(mapped)){
         const role = String(auth.role || '').toLowerCase()
         if(role === 'owner'){
           // full access
         } else if(role === 'admin'){
-          const adminTeam = String(auth.team || '').toLowerCase()
+          const norm = (s:any)=> String(s||'').toLowerCase().replace(/\s+/g,' ').trim()
+          const adminTeam = norm(auth.team)
           if(adminTeam.includes('all market')){
             // full access
           } else if(adminTeam){
-            // filter by same team owners or users reporting to admin
-            // We need a list of user ids by team/manager; fetch minimal fields
-            try{
-              const [teamRows]: any = await db.query('SELECT id, role, team, manager_id FROM users')
-              const allowedOwnerIds = new Set<string>()
-              for(const u of teamRows){
-                const roleLower = String(u.role||'').toLowerCase()
-                const uTeam = String(u.team||'').toLowerCase()
-                const reportsTo = u.manager_id != null ? String(u.manager_id) : ''
-                const isUserLevel = roleLower === 'user' || roleLower === 'bdm'
-                const sameMarket = uTeam === adminTeam
-                const reportsToAdmin = reportsTo && reportsTo === String(auth.id)
-                if(isUserLevel && (sameMarket || reportsToAdmin)) allowedOwnerIds.add(String(u.id))
-              }
-              allowedOwnerIds.add(String(auth.id))
-              mapped = mapped.filter((c:any)=> allowedOwnerIds.has(String(c.ownerId || c.owner_id)))
-            }catch{
-              // If users.manager_id is missing or query failed, fallback to same-team only using users table
-              try{
-                const [sameTeamUsers]: any = await db.query('SELECT id, role FROM users WHERE LOWER(team) = ?', [adminTeam])
-                const allowedOwnerIds = new Set<string>()
-                for(const u of (Array.isArray(sameTeamUsers) ? sameTeamUsers : [])){
-                  const roleLower = String(u.role||'').toLowerCase()
-                  const isUserLevel = roleLower === 'user' || roleLower === 'bdm'
-                  if(isUserLevel) allowedOwnerIds.add(String(u.id))
-                }
-                allowedOwnerIds.add(String(auth.id))
-                mapped = mapped.filter((c:any)=> allowedOwnerIds.has(String(c.ownerId || c.owner_id)))
-              }catch{
-                // Last-resort: restrict to admin's own clients
-                mapped = mapped.filter((c:any)=> String(c.ownerId || c.owner_id) === String(auth.id))
+            // Admin sees users on their same Markets (team match), typically user-level roles
+            const allowedOwnerIds = new Set<string>()
+            for(const u of (Array.isArray(urows) ? urows : [])){
+              const uTeam = norm(u.team)
+              const uRole = String(u.role || '').toLowerCase()
+              if(uTeam === adminTeam && (uRole === 'user' || uRole === 'bdm')){
+                allowedOwnerIds.add(String(u.id))
               }
             }
+            // Also include the admin's own id so they see their own clients
+            allowedOwnerIds.add(String(auth.id))
+            mapped = mapped.filter((c:any)=> allowedOwnerIds.has(String(c.ownerId || resolveOwnerId(c) || c.owner_id)))
           } else {
-            mapped = mapped.filter((c:any)=> String(c.ownerId || c.owner_id) === String(auth.id))
+            // No team on admin: fallback to own only
+            mapped = mapped.filter((c:any)=> String(c.ownerId || resolveOwnerId(c) || c.owner_id) === String(auth.id))
           }
         } else {
-          mapped = mapped.filter((c:any)=> String(c.ownerId || c.owner_id) === String(auth.id))
+          // User: only own data
+          mapped = mapped.filter((c:any)=> String(c.ownerId || resolveOwnerId(c) || c.owner_id) === String(auth.id))
         }
       }
       return res.json({ data: mapped })
@@ -226,6 +249,18 @@ export default function clientsRouter(io: IOServer) {
     const pool = getPool(req);
     if (!pool) return res.status(500).json({ error: 'No DB' });
     const id = req.params.id;
+    const db:any = pool
+    // Auth: determine caller role for RLS on mutations
+    async function getAuthUser(){
+      try{
+        const hdrId = (req.headers['x-user-id'] || req.headers['X-User-Id'] || '') as string
+        const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
+        if(!hdrId && !hdrEmail) return null
+        const [urows]: any = await db.query('SELECT id, email, role, team FROM users WHERE (id = ? AND ? <> "") OR (email = ? AND ? <> "") LIMIT 1', [hdrId, hdrId, hdrEmail, hdrEmail])
+        return Array.isArray(urows) && urows.length ? urows[0] : null
+      }catch{ return null }
+    }
+    const auth = await getAuthUser()
     const schema = (req.app as any).schema?.clients || null
     const pk = (schema && Array.isArray(schema) ? (schema.find((c:any)=> String(c.key||'').toUpperCase()==='PRI') || null) : null)
     const pkCol = (pk && pk.name) || 'id'
@@ -300,6 +335,21 @@ export default function clientsRouter(io: IOServer) {
       if(Array.isArray(payload.servicesInterested)) payload.servicesInterested = (payload.servicesInterested as any[]).map(v=>String(v)).join(', ')
     }
 
+    // RLS (mutations): Users cannot edit Stage
+    try{
+      const role = String((auth && auth.role) || '').toLowerCase()
+      if(role === 'user' || role === 'bdm'){
+        const tryingStage = (
+          payload.stage !== undefined ||
+          payload.pipeline_stage !== undefined ||
+          (req.body && (req.body.Stage !== undefined || req.body.pipelineStage !== undefined))
+        )
+        if(tryingStage){
+          return res.status(403).json({ code: 'ERR_FORBIDDEN_STAGE', message: 'Users are not allowed to update Stage' })
+        }
+      }
+    }catch{ /* ignore */ }
+
     const cols = Object.keys(payload).filter(k=>k !== 'id' && payload[k] !== undefined)
     if(cols.length === 0) return res.status(400).json({ code: 'ERR_NO_FIELDS', message: 'No fields to update' })
     const setSql = cols.map(c=>`\`${c}\` = ?`).join(', ')
@@ -324,6 +374,22 @@ export default function clientsRouter(io: IOServer) {
     const pool = getPool(req);
     if (!pool) return res.status(500).json({ error: 'No DB' });
     const id = req.params.id;
+    const db:any = pool
+    // RLS (mutations): Users cannot delete clients
+    try{
+      const hdrId = (req.headers['x-user-id'] || req.headers['X-User-Id'] || '') as string
+      const hdrEmail = (req.headers['x-user-email'] || req.headers['X-User-Email'] || '') as string
+      if(hdrId || hdrEmail){
+        try{
+          const [urows]: any = await db.query('SELECT id, email, role FROM users WHERE (id = ? AND ? <> "") OR (email = ? AND ? <> "") LIMIT 1', [hdrId, hdrId, hdrEmail, hdrEmail])
+          const u = Array.isArray(urows) && urows.length ? urows[0] : null
+          const role = String((u && u.role) || '').toLowerCase()
+          if(role === 'user' || role === 'bdm'){
+            return res.status(403).json({ code: 'ERR_FORBIDDEN_DELETE', message: 'Users are not allowed to delete clients' })
+          }
+        }catch{ /* ignore */ }
+      }
+    }catch{ /* ignore */ }
     const schema = (req.app as any).schema?.clients || null
     const pkCol = (schema && Array.isArray(schema) ? (schema.find((c:any)=> String(c.key||'').toUpperCase()==='PRI')?.name) : null) || 'id'
     try{

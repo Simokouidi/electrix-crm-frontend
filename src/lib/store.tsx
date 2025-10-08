@@ -802,6 +802,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
         if(actRow){
           const na = normalizeActivityRow(actRow) as Activity
           setActivities(prev => prev.some(a => String(a.id) === String((na as any).id)) ? prev : [na, ...prev])
+          // Also sync client.next_followup in DB to this cutoff
+          try{
+            const clientIdVal = base?.clientId
+            if(clientIdVal){
+              const idPath = !Number.isNaN(Number(clientIdVal)) ? String(Number(clientIdVal)) : String(clientIdVal)
+              const cutDateOnly = cutoffDateOnly ? String(cutoffDateOnly).slice(0,10) : null
+              await fetch(baseUrl + '/api/clients/' + idPath, withUserHeaders({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next_followup: cutDateOnly }) }))
+              setClients(prev => prev.map(c => String(c.id) === String(clientIdVal) ? { ...c, nextFollowUpDate: cutDateOnly ? new Date(cutDateOnly).toISOString() : null } : c))
+            }
+          }catch(_){ /* ignore sync errors */ }
           return na
         }
         return null
@@ -889,6 +899,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
         const na = normalizeActivityRow(actRow) as Activity
         // Avoid duplicate if socket already added it
         setActivities(prev => prev.some(a => String(a.id) === String((na as any).id)) ? prev : [na, ...prev])
+        // Sync client.next_followup in DB to this cutoff
+        try{
+          const clientIdForSync: any = (typeof clientIdVal !== 'undefined' ? clientIdVal : (base?.clientId as any))
+          if(clientIdForSync){
+            const idPath = !Number.isNaN(Number(clientIdForSync)) ? String(Number(clientIdForSync)) : String(clientIdForSync)
+            const cutDateOnlyStr = cutoffDateOnly ? String(cutoffDateOnly).slice(0,10) : null
+            await fetch(baseUrl + '/api/clients/' + idPath, withUserHeaders({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next_followup: cutDateOnlyStr }) }))
+            setClients(prev => prev.map(c => String(c.id) === String(clientIdForSync) ? { ...c, nextFollowUpDate: cutDateOnlyStr ? new Date(cutDateOnlyStr).toISOString() : null } : c))
+          }
+        }catch(_){ /* ignore sync errors */ }
         return na
       }
       return null
@@ -921,6 +941,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
         result = newSnap
         return [newSnap, ...prev]
       })
+
+      // Local-only: reflect next follow-up on client state (best effort)
+      try{
+        const clientIdVal = base?.clientId
+        if(clientIdVal){
+          const cutDateOnly = (patch.cut_off_date && patch.status !== 'Postponed') ? String(patch.cut_off_date).slice(0,10) : null
+          setClients(prev => prev.map(c => String(c.id) === String(clientIdVal) ? { ...c, nextFollowUpDate: cutDateOnly ? new Date(cutDateOnly).toISOString() : null } : c))
+        }
+      }catch(_){ /* ignore */ }
 
       // Update client status locally when meaningful
       if(result && patch.cut_off_date){
@@ -1123,9 +1152,129 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
   return { simulated: true }
   }
   
+  // Helpers to safely read fields that may be capitalized in DB rows
+  const getRole = (u?: any) => String(u?.role || u?.Role || '').toLowerCase()
+  const getTeamName = (u?: any) => String(u?.team || u?.Team || '').toLowerCase()
+  const getPhone = (u?: any) => String(u?.phone || u?.Phone || '').trim()
+  const getEmail = (u?: any) => String(u?.email || u?.Email || '').trim()
+  const uniq = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)))
+  const normalizePhone = (p: string) => {
+    const s = (p || '').trim()
+    if(!s) return s
+    // if starts with 00 convert to +, else leave +E.164 or raw digits as-is
+    if(s.startsWith('00')) return '+' + s.slice(2)
+    return s
+  }
+  // Global exclusions: do not notify these recipients
+  const EXCLUDED_RECIPIENTS = {
+    names: new Set<string>(['christopher poon']),
+    phones: new Set<string>(['+85261125665']),
+    emails: new Set<string>(['christopher.poon@electrixspace.com'])
+  }
+  function isExcludedRecipient(user?: any, phone?: string){
+    const nm = String(user?.name || '').toLowerCase().trim()
+    const ph = normalizePhone(String(phone || ''))
+    if(nm && EXCLUDED_RECIPIENTS.names.has(nm)) return true
+    if(ph && EXCLUDED_RECIPIENTS.phones.has(ph)) return true
+    return false
+  }
+
+  // Email sending via Heroku contact endpoint
+  const EMAIL_ENDPOINT_DEFAULT = 'https://careforce-contact-backend-47e3076b508c.herokuapp.com/contact'
+  function getEmailEndpoint(){
+    if(typeof window !== 'undefined'){
+      const ls = localStorage.getItem('EMAIL_ENDPOINT')
+      if(ls) return ls
+    }
+    const env = (import.meta as any).env?.VITE_EMAIL_ENDPOINT
+    return env || EMAIL_ENDPOINT_DEFAULT
+  }
+  async function sendEmailHeroku(toEmail: string, toName: string, subject: string, text: string){
+    if(!toEmail) return { ok: false, skipped: true }
+    const endpoint = getEmailEndpoint()
+    // Include subject at the top of the message body since the endpoint doesn't accept a subject field
+    const message = `Subject: ${subject}\n\n${text}`
+    const payload = {
+      name: toName || 'ELECTRIX CRM',
+      email: toEmail,
+      message,
+      website: '',
+      contact_time: new Date().toISOString()
+    }
+    try{
+      const hdrs: Record<string,string> = { 'Content-Type': 'application/json' }
+      // Provide contextual headers that some backends use in anti-spam heuristics
+      try{
+        if(typeof window !== 'undefined'){
+          hdrs['Origin'] = window.location.origin
+          hdrs['Referer'] = window.location.href
+        }
+      }catch{}
+      hdrs['User-Agent'] = 'ElectrixCRM/1.0 (+https://electrixspace.com)'
+      // Optional backend bypass token if configured
+      let token = ''
+      try{ if(typeof window !== 'undefined') token = localStorage.getItem('EMAIL_TOKEN') || '' }catch{}
+      token = token || (import.meta as any).env?.VITE_EMAIL_TOKEN || ''
+      if(token) hdrs['X-CRM-Token'] = token
+
+      const res = await fetch(endpoint, { method: 'POST', headers: hdrs, body: JSON.stringify(payload) })
+      const ok = res.ok
+      if(!ok){
+        const t = await res.text().catch(()=>String(res.status))
+        console.warn('[Email][Heroku] Failed', res.status, t)
+      }
+      return { ok }
+    }catch(err){
+      console.warn('[Email][Heroku] Error', err)
+      return { ok: false, error: String(err) }
+    }
+  }
+
+  // Global CC list for all outbound emails
+  const CC_EMAILS_DEFAULT = ['simo.kouidi@electrixspace.com']
+
+  // Fetch helpers (bypass RLS by omitting user headers intentionally for notifications routing only)
+  async function fetchAllUsersNoRls(): Promise<TeamMember[]>{
+    try{
+      const base = API_BASE || ''
+      const res = await fetch(base + '/api/users')
+      if(!res.ok) return []
+      const json = await res.json().catch(()=>null)
+      const rows = Array.isArray(json) ? json : (json && Array.isArray((json as any).data) ? (json as any).data : [])
+      return (rows || []).map(normalizeTeamRow) as TeamMember[]
+    }catch{ return [] }
+  }
+  async function fetchUserByIdNoRls(id: string): Promise<TeamMember | null>{
+    try{
+      const base = API_BASE || ''
+      const res = await fetch(base + '/api/users/' + encodeURIComponent(id))
+      if(!res.ok) return null
+      const json = await res.json().catch(()=>null)
+      const row = (json && (json as any).data) ? (json as any).data : json
+      return row ? (normalizeTeamRow(row) as TeamMember) : null
+    }catch{ return null }
+  }
+  async function resolveUserByIdOrName(key: string): Promise<TeamMember | null>{
+    if(!key) return null
+    // Try local team first (id match)
+    let u = team.find(t => String(t.id) === String(key)) || null
+    if(u) return u
+    // Try name match (case-insensitive)
+    u = team.find(t => String((t.name||'')).toLowerCase() === String(key).toLowerCase()) || null
+    if(u) return u
+    // Fallback to full list without RLS
+    const all = await fetchAllUsersNoRls()
+    const byId = all.find(t => String(t.id) === String(key))
+    if(byId) return byId
+    const byName = all.find(t => String((t.name||'')).toLowerCase() === String(key).toLowerCase())
+    return byName || null
+  }
+
   // Format helpers for notifications per requirements
   async function notifyStatusChange(activity: Activity, changerId: string, note: string){
-    const changer = team.find(t=>t.id === changerId)?.name || 'Unknown'
+    const changerUser = team.find(t=>String(t.id) === String(changerId))
+    const changer = changerUser?.name || 'Unknown'
+    const changerTeam = getTeamName(changerUser)
     const clientName = activity.clientId ? (clients.find(c=>c.id===activity.clientId)?.clientName || '—') : '—'
     const when = new Date().toISOString().slice(0,16).replace('T',' ')
     const lines = [
@@ -1138,38 +1287,115 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     ]
     const message = lines.join('\n')
 
-  // During testing all notifications should go to the manager test number provided
-  const TEST_RECIPIENT = '+85262392890'
-  // Debug: log the bot API info so browser console shows what will be used
-  if(typeof window !== 'undefined') console.debug('[NotifyStatus] Sending to', TEST_RECIPIENT)
-  // Send the formatted notification
-  await sendWhatsApp(TEST_RECIPIENT, message)
-    // If postponed, send additional action-required message including the same details
-    if(activity.status === 'Postponed'){
-      const extra = '\n\n⚠️ Action required: Please discuss with BDM to set a new cut-off date.'
-      await sendWhatsApp(TEST_RECIPIENT, message + extra)
+    // Recipients: direct manager (if any, else admin in same market), plus all Owners
+    let ownersUsers = team.filter(t => getRole(t) === 'owner' && !isExcludedRecipient(t, getPhone(t)))
+    if(ownersUsers.length === 0){
+      const all = await fetchAllUsersNoRls()
+      ownersUsers = all.filter(t => getRole(t) === 'owner' && !isExcludedRecipient(t, getPhone(t)))
+    }
+    // Prefer explicit managerId hop if present
+    let managerUser: TeamMember | null = null
+    if(changerUser?.managerId){
+      const local = team.find(t => String(t.id) === String(changerUser?.managerId)) || null
+      if(local && !isExcludedRecipient(local, getPhone(local))) managerUser = local
+      if(!managerUser){
+        const remote = await fetchUserByIdNoRls(String(changerUser.managerId))
+        if(remote && !isExcludedRecipient(remote, getPhone(remote))) managerUser = remote
+      }
+    }
+    // Fallback: Admin in same market/team
+    if(!managerUser && changerTeam){
+      let sameMarketAdmin = team.find(t => getRole(t) === 'admin' && getTeamName(t) === changerTeam) || null
+      if(!sameMarketAdmin){
+        const all = await fetchAllUsersNoRls()
+        sameMarketAdmin = all.find(t => getRole(t) === 'admin' && getTeamName(t) === changerTeam) || null
+      }
+      if(sameMarketAdmin && !isExcludedRecipient(sameMarketAdmin, getPhone(sameMarketAdmin))) managerUser = sameMarketAdmin
+    }
+
+    // WhatsApp: send to phones
+    const phones = uniq([
+      managerUser ? normalizePhone(getPhone(managerUser)) : '',
+      ...ownersUsers.map(u => normalizePhone(getPhone(u)))
+    ]).filter(ph => ph && !EXCLUDED_RECIPIENTS.phones.has(ph))
+    if(typeof window !== 'undefined') console.debug('[NotifyStatus] Recipients (phones):', phones)
+    for(const ph of phones){
+      if(!ph) continue
+      try{ await sendWhatsApp(ph, message) }catch(_){/* logged in sendWhatsApp */}
+      if(activity.status === 'Postponed'){
+        const extra = '\n\n⚠️ Action required: Please discuss with BDM to set a new cut-off date.'
+        try{ await sendWhatsApp(ph, message + extra) }catch(_){/* ignore */}
+      }
+    }
+
+    // Email: send to emails via Heroku endpoint
+    const emailUsers = [managerUser, ...ownersUsers].filter(Boolean) as TeamMember[]
+    let emails = uniq(emailUsers
+      .map(u => getEmail(u))
+      .filter(e => e && !EXCLUDED_RECIPIENTS.emails.has(String(e).toLowerCase())))
+    // Always include CCs
+    const emailsLowerSet = new Set(emails.map(e => String(e).toLowerCase()))
+    for(const cc of CC_EMAILS_DEFAULT){
+      const lc = String(cc).toLowerCase()
+      if(!emailsLowerSet.has(lc)) emails.push(cc)
+    }
+    if(emails.length){
+      const subject = 'ELECTRIX CRM — Client Status Updated'
+      const textExtra = activity.status === 'Postponed'
+        ? '\n\nAction required: Please discuss with BDM to set a new cut-off date.'
+        : ''
+      const text = message + textExtra + '\n\nThis is an automated notification from ELECTRIX CRM.'
+      for(const e of emails){
+        const eLc = String(e).toLowerCase()
+        const u = emailUsers.find(u => (getEmail(u) || '').toLowerCase() === eLc) || team.find(u => (getEmail(u) || '').toLowerCase() === eLc) || null
+        const name = (u?.name) || (eLc === 'simo.kouidi@electrixspace.com' ? 'Simo Kouidi (CC)' : 'Recipient')
+        await sendEmailHeroku(String(e), name, subject, text)
+      }
     }
   }
 
   async function notifyAssignment(activity: Activity, assignedToId: string, managerId: string, note: string){
-    const manager = team.find(t=>t.id===managerId)?.name || 'Manager'
-    const assignee = team.find(t=>t.id===assignedToId)
-    const assigneePhone = assignee?.phone
+    const managerName = team.find(t=>String(t.id)===String(managerId))?.name || 'Manager'
+    const assignee = team.find(t=>String(t.id)===String(assignedToId))
+    // ownerId might be an id or a name depending on DB export; resolve robustly
+    const ownerKey = String(activity.ownerId || '')
+    let ownerUser = await resolveUserByIdOrName(ownerKey)
+    // If still missing, attempt to use assignee as fallback if assignment equals a user id
+    if(!ownerUser && assignee){ ownerUser = assignee }
+    const ownerPhone = normalizePhone(getPhone(ownerUser))
     const clientName = activity.clientId ? (clients.find(c=>c.id===activity.clientId)?.clientName || '—') : '—'
     const when = new Date().toISOString().slice(0,16).replace('T',' ')
     const lines = [
       '✅ New Task Assigned',
-      `👤 Assigned by: ${manager}`,
-      `👥 Assigned to: ${assignee?.name || '—'}`,
+      `👤 Assigned by: ${managerName}`,
+      `👥 Assigned to: ${assignee?.name || ownerUser?.name || '—'}`,
       `🏢 Client: ${clientName}`,
       `📋 Task: ${activity.title}`,
       `🗓 Date: ${when}`,
       `📝 Note: "${note || ''}"`
     ]
     const message = lines.join('\n')
-  const TEST_RECIPIENT = '+85262392890'
-  if(typeof window !== 'undefined') console.debug('[NotifyAssign] Sending to', TEST_RECIPIENT, 'Assigned to', assignee?.name)
-  await sendWhatsApp(TEST_RECIPIENT, message)
+
+    // Recipient: activity owner phone as requested
+    const recipient = ownerPhone
+    if(typeof window !== 'undefined') console.debug('[NotifyAssign] Recipient:', recipient, 'Assigned to', assignee?.name)
+    if(recipient){ await sendWhatsApp(recipient, message) }
+    // Email to owner as well
+    const ownerEmail = getEmail(ownerUser)
+    const emailsToSend: string[] = []
+    if(ownerEmail && !EXCLUDED_RECIPIENTS.emails.has(ownerEmail.toLowerCase())) emailsToSend.push(ownerEmail)
+    // Always CC
+    for(const cc of CC_EMAILS_DEFAULT){ if(!emailsToSend.some(e => e.toLowerCase() === cc.toLowerCase())) emailsToSend.push(cc) }
+    if(emailsToSend.length){
+      const subject = 'ELECTRIX CRM — New Task Assigned'
+      const text = message + '\n\nPlease log in to ELECTRIX CRM to review and take action.'
+      for(const e of emailsToSend){
+        const eLc = e.toLowerCase()
+        const u = team.find(u => (getEmail(u) || '').toLowerCase() === eLc) || null
+        const name = (u?.name) || (eLc === 'simo.kouidi@electrixspace.com' ? 'Simo Kouidi (CC)' : 'Recipient')
+        await sendEmailHeroku(e, name, subject, text)
+      }
+    }
   }
   
   function addActivity(a: Omit<Activity,'id'>){

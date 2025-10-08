@@ -32,16 +32,16 @@ export default function CalendarPicker({ value, onSelect, onCancel }: Props){
   }
 
   return (
-    <div className="w-64 bg-white border rounded shadow p-3">
+    <div className="w-64 bg-white border border-slate-200 rounded shadow-sm p-3 text-slate-600">
       <div className="flex items-center justify-between mb-2">
-        <div className="font-semibold">{currentMonth.toLocaleString(undefined, { month: 'long' })} {currentMonth.getFullYear()}</div>
+        <div className="font-semibold text-slate-700">{currentMonth.toLocaleString(undefined, { month: 'long' })} {currentMonth.getFullYear()}</div>
         <div className="flex gap-2">
           <button onClick={()=>setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth()-1, 1))} className="text-slate-600">↑</button>
-          <button onClick={()=>setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth()+1, 1))} className="text-slate-600">↓</button>
+          <button onClick={()=>setCurrentMonth(m => new Date(m.getFullYear(), m.getMonth()+1, 1))} className="text-slate-500 hover:text-slate-700">↓</button>
         </div>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-sm text-slate-600 mb-2">
+      <div className="grid grid-cols-7 gap-1 text-center text-sm text-slate-500 mb-2">
         {['Su','Mo','Tu','We','Th','Fr','Sa'].map(x=> <div key={x} className="py-1">{x}</div>)}
       </div>
 
@@ -50,7 +50,7 @@ export default function CalendarPicker({ value, onSelect, onCancel }: Props){
           const isCurrentMonth = d.getMonth() === currentMonth.getMonth()
           const isToday = new Date().toDateString() === d.toDateString()
           return (
-            <button key={idx} onClick={() => selectDate(d)} className={`py-2 rounded ${isCurrentMonth ? 'text-slate-800' : 'text-slate-400'} ${isToday ? 'bg-slate-100 rounded-md font-semibold' : ''}`}>
+            <button key={idx} onClick={() => selectDate(d)} className={`py-2 rounded ${isCurrentMonth ? 'text-slate-700' : 'text-slate-400'} ${isToday ? 'bg-slate-100 rounded-md font-semibold' : ''}`}>
               {d.getDate()}
             </button>
           )
@@ -59,10 +59,10 @@ export default function CalendarPicker({ value, onSelect, onCancel }: Props){
 
       <div className="flex items-center justify-between mt-3 text-sm">
         <div className="flex gap-4">
-          <button className="text-sky-600" onClick={() => onSelect(null)}>Clear</button>
-          <button className="text-slate-500" onClick={() => onCancel && onCancel()}>Cancel</button>
+          <button className="text-slate-500 hover:text-slate-700" onClick={() => onSelect(null)}>Clear</button>
+          <button className="text-slate-500 hover:text-slate-700" onClick={() => onCancel && onCancel()}>Cancel</button>
         </div>
-        <button className="text-sky-600" onClick={() => { const t = new Date(); onSelect(new Date(t.getFullYear(), t.getMonth(), t.getDate()).toISOString()) }}>Today</button>
+        <button className="text-slate-600 hover:text-slate-800" onClick={() => { const t = new Date(); onSelect(new Date(t.getFullYear(), t.getMonth(), t.getDate()).toISOString()) }}>Today</button>
       </div>
     </div>
   )

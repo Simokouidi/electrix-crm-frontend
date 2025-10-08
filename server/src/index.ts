@@ -8,6 +8,9 @@ import activitiesRouter from './routes/activities';
 import usersRouter from './routes/users';
 import authRouter from './routes/auth';
 import dbRouter from './routes/db';
+import botRouter from './routes/bot';
+import usageRouter from './routes/usage';
+import metricsRouter from './routes/metrics';
 import { loadSchema } from './schema'
 import bcrypt from 'bcryptjs';
 
@@ -27,6 +30,9 @@ app.use('/api/activities', activitiesRouter(io));
 app.use('/api/users', usersRouter(io));
 app.use('/api/auth', authRouter(io));
 app.use('/api/db', dbRouter);
+app.use('/api/bot', botRouter());
+app.use('/api/usage', usageRouter);
+app.use('/api/metrics', metricsRouter);
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 
@@ -53,7 +59,8 @@ async function start() {
 
   if (process.env.MYSQL_URL || process.env.DATABASE_URL) {
     const url = process.env.MYSQL_URL || process.env.DATABASE_URL!;
-    pool = createPool({ uri: url, connectionLimit: 10 });
+    // mysql2 supports passing a connection URI string directly
+    pool = createPool(url);
     await validateSchema(pool);
     // store pool on app locals for routers
     (app as any).db = pool;
@@ -112,7 +119,25 @@ async function start() {
           await pool.query('UPDATE users SET name = ?, role = ?, password = ? WHERE email = ?', [adminName, 'Admin', hashed, adminEmail])
           console.log('Admin user updated by email')
         }else{
-          await pool.query('INSERT INTO users (name, email, role, password) VALUES (?, ?, ?, ?)', [adminName, adminEmail, 'Admin', hashed])
+          // Detect if schema has a NOT NULL Phone/phone column without default; include a placeholder value if needed
+          let needPhoneCol: string | null = null
+          try{
+            const [cols]: any = await pool.query("SELECT COLUMN_NAME, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users'")
+            if(Array.isArray(cols)){
+              for(const c of cols){
+                const n = String(c.COLUMN_NAME)
+                const isNotNull = String(c.IS_NULLABLE||'').toUpperCase() === 'NO'
+                const hasDefault = c.COLUMN_DEFAULT !== null && c.COLUMN_DEFAULT !== undefined
+                if((n === 'Phone' || n === 'phone') && isNotNull && !hasDefault){ needPhoneCol = n; break }
+              }
+            }
+          }catch{/* ignore */}
+          if(needPhoneCol){
+            const sql = `INSERT INTO users (name, email, role, password, ${needPhoneCol}) VALUES (?, ?, ?, ?, ?)`
+            await pool.query(sql, [adminName, adminEmail, 'Admin', hashed, ''])
+          }else{
+            await pool.query('INSERT INTO users (name, email, role, password) VALUES (?, ?, ?, ?)', [adminName, adminEmail, 'Admin', hashed])
+          }
           console.log('Admin user inserted by email')
         }
       }catch(upsertErr:any){
