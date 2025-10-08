@@ -58,6 +58,62 @@ export default function SettingsPage(){
     const merged: RequestInit = { ...init, headers: { ...(init?.headers as any), ...authHeaders } }
     return fetch(`${apiBase}${path}`, merged)
   }
+  // usage session + timers
+  const sessionIdRef = React.useRef<string>('')
+  const mountTsRef = React.useRef<number>(0)
+  const flushedRef = React.useRef<boolean>(false)
+  function genSessionId(){
+    const g: any = globalThis as any
+    if(g?.crypto?.randomUUID){ return g.crypto.randomUUID() as string }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = (Math.random() * 16) | 0
+      const v = c === 'x' ? r : (r & 0x3) | 0x8
+      return v.toString(16)
+    })
+  }
+  async function sendUsage(activity_type: string, activity_details?: any, time_spent_seconds?: number){
+    try{
+      if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
+      let API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+      if(!API_BASE && typeof window !== 'undefined'){
+        const host = (window.location && window.location.hostname) || 'localhost'
+        if(host === 'localhost' || host === '127.0.0.1'){
+          API_BASE = 'http://localhost:4000'
+        }
+      }
+      const body: any = {
+        user_id: String((currentUser as any)?.id || (currentUser as any)?.ID || 'unknown'),
+        activity_type,
+        activity_details: activity_details ? JSON.stringify(activity_details) : undefined,
+        session_id: sessionIdRef.current,
+        time_spent_seconds: typeof time_spent_seconds === 'number' ? time_spent_seconds : undefined,
+      }
+      const hdrs: Record<string,string> = { 'Content-Type': 'application/json' }
+      const uid = String((currentUser as any)?.id || (currentUser as any)?.ID || '')
+      const uemail = String((currentUser as any)?.email || '')
+      if(uid) hdrs['X-User-Id'] = uid
+      if(uemail) hdrs['X-User-Email'] = uemail
+      await fetch((API_BASE || '') + '/api/usage', { method: 'POST', headers: hdrs, body: JSON.stringify(body) })
+    }catch{ /* ignore */ }
+  }
+  React.useEffect(() => {
+    if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
+    mountTsRef.current = Date.now()
+    flushedRef.current = false
+    sendUsage('settings_page_open', { path: (typeof location !== 'undefined' ? location.pathname : '') }).catch(()=>{})
+    function flush(reason: string){
+      if(flushedRef.current) return
+      const start = mountTsRef.current || Date.now()
+      const sec = Math.max(0, Math.round((Date.now() - start) / 1000))
+      flushedRef.current = true
+      sendUsage('settings_page_time', { reason, path: (typeof location !== 'undefined' ? location.pathname : '') }, sec)
+    }
+    const onPageHide = () => flush('pagehide')
+    const onBeforeUnload = () => flush('beforeunload')
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => { window.removeEventListener('pagehide', onPageHide); window.removeEventListener('beforeunload', onBeforeUnload); flush('unmount') }
+  }, [])
 
   // --- Users & Access prototype state (in-memory demo data) -----------------
   // Roles simplified to canonical set

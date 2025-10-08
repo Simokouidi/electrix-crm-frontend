@@ -197,6 +197,14 @@ export default function ActivitiesPage(){
   async function sendUsage(activity_type: string, activity_details?: any, time_spent_seconds?: number){
     try{
       if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
+      // Resolve API base for production (Railway) and local dev
+      let API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+      if(!API_BASE && typeof window !== 'undefined'){
+        const host = (window.location && window.location.hostname) || 'localhost'
+        if(host === 'localhost' || host === '127.0.0.1'){
+          API_BASE = 'http://localhost:4000'
+        }
+      }
       const body = {
         // Prefer currentUser.id but fall back to store's currentUser (string) or 'unknown'
         user_id: String((currentUser as any)?.id || (currentUser as any)?.ID || 'unknown'),
@@ -205,9 +213,15 @@ export default function ActivitiesPage(){
         session_id: sessionIdRef.current,
         time_spent_seconds: typeof time_spent_seconds === 'number' ? time_spent_seconds : undefined,
       }
-      await fetch('/api/usage', {
+      const hdrs: Record<string,string> = { 'Content-Type': 'application/json' }
+      // Include identity headers similar to other API calls (for future server-side filtering)
+      const uid = String((currentUser as any)?.id || (currentUser as any)?.ID || '')
+      const uemail = String((currentUser as any)?.email || '')
+      if(uid) hdrs['X-User-Id'] = uid
+      if(uemail) hdrs['X-User-Email'] = uemail
+      await fetch((API_BASE || '') + '/api/usage', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: hdrs,
         body: JSON.stringify(body)
       })
     }catch{ /* non-blocking */ }

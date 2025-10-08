@@ -15,8 +15,60 @@ export default function ChangePasswordPage() {
   const [error, setError] = useState<string | null>(null)
   const [ok, setOk] = useState(false)
   const [mounted,setMounted] = useState(false)
+  // usage session + timers
+  const sessionIdRef = React.useRef<string>('')
+  const mountTsRef = React.useRef<number>(0)
+  const flushedRef = React.useRef<boolean>(false)
+  function genSessionId(){
+    const g: any = globalThis as any
+    if(g?.crypto?.randomUUID){ return g.crypto.randomUUID() as string }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = (Math.random() * 16) | 0
+      const v = c === 'x' ? r : (r & 0x3) | 0x8
+      return v.toString(16)
+    })
+  }
+  async function sendUsage(activity_type: string, activity_details?: any, time_spent_seconds?: number){
+    try{
+      if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
+      let API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+      if(!API_BASE && typeof window !== 'undefined'){
+        const host = (window.location && window.location.hostname) || 'localhost'
+        if(host === 'localhost' || host === '127.0.0.1'){
+          API_BASE = 'http://localhost:4000'
+        }
+      }
+      const body: any = {
+        user_id: 'unknown',
+        activity_type,
+        activity_details: activity_details ? JSON.stringify(activity_details) : undefined,
+        session_id: sessionIdRef.current,
+        time_spent_seconds: typeof time_spent_seconds === 'number' ? time_spent_seconds : undefined,
+      }
+      const hdrs: Record<string,string> = { 'Content-Type': 'application/json' }
+      await fetch((API_BASE || '') + '/api/usage', { method: 'POST', headers: hdrs, body: JSON.stringify(body) })
+    }catch{ /* ignore */ }
+  }
 
   useEffect(()=>{ requestAnimationFrame(()=>setMounted(true)) },[])
+  useEffect(() => {
+    if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
+    mountTsRef.current = Date.now()
+    flushedRef.current = false
+    sendUsage('change_password_page_open', { path: (typeof location !== 'undefined' ? location.pathname : '') }).catch(()=>{})
+    function flush(reason: string){
+      if(flushedRef.current) return
+      const start = mountTsRef.current || Date.now()
+      const sec = Math.max(0, Math.round((Date.now() - start) / 1000))
+      flushedRef.current = true
+      sendUsage('change_password_page_time', { reason, path: (typeof location !== 'undefined' ? location.pathname : '') }, sec)
+    }
+    const onPageHide = () => flush('pagehide')
+    const onBeforeUnload = () => flush('beforeunload')
+    window.addEventListener('pagehide', onPageHide)
+    window.addEventListener('beforeunload', onBeforeUnload)
+    return () => { window.removeEventListener('pagehide', onPageHide); window.removeEventListener('beforeunload', onBeforeUnload); flush('unmount') }
+  }, [])
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -25,15 +77,26 @@ export default function ChangePasswordPage() {
     if (nextPw !== confirm) { setError('New password and confirmation do not match.'); return }
     setSaving(true)
     try {
-      const res = await fetch('/api/auth/change-password', {
+      let API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+      if(!API_BASE && typeof window !== 'undefined'){
+        const host = (window.location && window.location.hostname) || 'localhost'
+        if(host === 'localhost' || host === '127.0.0.1'){
+          API_BASE = 'http://localhost:4000'
+        }
+      }
+      const headers: Record<string,string> = { 'Content-Type': 'application/json' }
+      if(email) headers['X-User-Email'] = email
+      const res = await fetch((API_BASE || '') + '/api/auth/change-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ email, currentPassword: current, newPassword: nextPw })
       })
       if (!res.ok) {
         const msg = await res.text().catch(()=> 'Failed to change password.')
         throw new Error(msg || 'Failed to change password.')
       }
+      // telemetry: record successful password change (no sensitive details)
+      try{ sendUsage('password_change_success', { path: (typeof location !== 'undefined' ? location.pathname : '') }) }catch{}
       setOk(true)
       setCurrent(''); setNextPw(''); setConfirm('')
     } catch (err:any) {
