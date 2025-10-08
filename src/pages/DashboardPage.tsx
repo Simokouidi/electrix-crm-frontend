@@ -15,6 +15,7 @@ export default function DashboardPage(){
   const [filterOwner, setFilterOwner] = React.useState('')
   const [filterClient, setFilterClient] = React.useState('')
   const [filterMonth, setFilterMonth] = React.useState('') // YYYY-MM
+  const [filterMarket, setFilterMarket] = React.useState<string>('') // '' | 'saudi' | 'dubai'
   const kpis = useKPIs()
   // usage session + timers
   const sessionIdRef = React.useRef<string>('')
@@ -148,27 +149,43 @@ export default function DashboardPage(){
     return team.filter(t => String(t.id) === String(currentUser.id))
   }, [team, currentUser, isOwner, isAdmin])
 
+  // Helper: check if a team member belongs to the selected market
+  const isInSelectedMarket = React.useCallback((u: any) => {
+    if(!filterMarket) return true
+    const t = String((u?.team || '')).toLowerCase()
+    if(filterMarket === 'saudi') return t.includes('saudi')
+    if(filterMarket === 'dubai') return t.includes('dubai')
+    return true
+  }, [filterMarket])
+
   // Select options interdependence: restrict owners by selected client (if any)
   const ownersForSelect = React.useMemo(() => {
     if(filterClient){
       const cli = clients.find(c => String(c.id) === String(filterClient))
       if(cli){
-        return teamForSelect.filter(t => String(t.id) === String(cli.ownerId))
+        return teamForSelect.filter(t => String(t.id) === String(cli.ownerId)).filter(isInSelectedMarket)
       }
     }
-    return teamForSelect
-  }, [teamForSelect, clients, filterClient])
+    return teamForSelect.filter(isInSelectedMarket)
+  }, [teamForSelect, clients, filterClient, isInSelectedMarket])
 
   // Client options interdependence: restrict by selected owner (if any)
   const clientsForSelect = React.useMemo(() => {
     if(filterOwner){
-      return (isPrivileged ? clients : clients.filter(c => c.ownerId === currentUser.id)).filter(c => String(c.ownerId) === String(filterOwner))
+      return (isPrivileged ? clients : clients.filter(c => c.ownerId === currentUser.id))
+        .filter(c => String(c.ownerId) === String(filterOwner))
+    }
+    // If market selected, restrict to clients whose owner is in that market
+    const ownerOk = (oid: string) => {
+      const u = team.find(t => String(t.id) === String(oid))
+      return u ? isInSelectedMarket(u) : true
     }
     return (isPrivileged ? clients : clients.filter(c => c.ownerId === currentUser.id))
-  }, [clients, filterOwner, isPrivileged, currentUser.id])
+      .filter(c => ownerOk(String(c.ownerId)))
+  }, [clients, filterOwner, isPrivileged, currentUser.id, team, isInSelectedMarket])
 
   // Compute role/market-scoped owner ids for notification counts
-  const allowedOwnerIds = React.useMemo(() => new Set(teamForSelect.map(t => String(t.id))), [teamForSelect])
+  const allowedOwnerIds = React.useMemo(() => new Set(teamForSelect.filter(isInSelectedMarket).map(t => String(t.id))), [teamForSelect, isInSelectedMarket])
 
   // Build a Next Actions list independent of the header filters for the notification bell
   const upcomingActivitiesAll = React.useMemo(() => {
@@ -201,19 +218,27 @@ export default function DashboardPage(){
   const filteredClients = React.useMemo(() => clients.filter(c => {
     if(filterOwner && c.ownerId !== filterOwner) return false
     if(filterClient && c.id !== filterClient) return false
+    // Market filter: restrict by client owner membership in selected market
+    if(filterMarket && !allowedOwnerIds.has(String(c.ownerId))) return false
     return true
-  }), [clients, filterOwner, filterClient])
+  }), [clients, filterOwner, filterClient, filterMarket, allowedOwnerIds])
 
   const filteredActivities = React.useMemo(() => activities.filter(a => {
     if(filterOwner && a.ownerId !== filterOwner) return false
     if(filterClient && a.clientId && filterClient && a.clientId !== filterClient) return false
+    if(filterMarket){
+      // Accept if activity owner or the client owner is within the allowed owner ids for selected market
+      const ownerOk = a.ownerId ? allowedOwnerIds.has(String(a.ownerId)) : false
+      const clientOwnerOk = a.clientId ? allowedOwnerIds.has(String(clients.find(c => String(c.id) === String(a.clientId))?.ownerId || '')) : false
+      if(!(ownerOk || clientOwnerOk)) return false
+    }
     if(filterMonth){
       const [y,m] = filterMonth.split('-').map(Number)
       const dt = a.cut_off_date ? new Date(a.cut_off_date) : new Date(a.datetime)
       if(!(dt.getFullYear() === y && (dt.getMonth()+1) === m)) return false
     }
     return true
-  }), [activities, filterOwner, filterClient, filterMonth])
+  }), [activities, filterOwner, filterClient, filterMonth, filterMarket, allowedOwnerIds, clients])
 
   // derived metrics (based on filteredClients/filteredActivities)
   // Define active stages considered in the pipeline
@@ -533,6 +558,32 @@ export default function DashboardPage(){
         <div className="flex items-center gap-4">
           <h1 className="text-3xl font-semibold">Dashboard</h1>
           <div className="flex items-center gap-2">
+            {/* Market filter: Saudi Team / Dubai Team */}
+            <select
+              value={filterMarket}
+              onChange={e=>{
+                const v = e.target.value as (''|'saudi'|'dubai')
+                setFilterMarket(v)
+                // If current owner falls outside new market, reset owner & client
+                if(filterOwner){
+                  const own = team.find(t => String(t.id) === String(filterOwner))
+                  const ok = own ? (v === '' || (v === 'saudi' && String((own as any).team||'').toLowerCase().includes('saudi')) || (v === 'dubai' && String((own as any).team||'').toLowerCase().includes('dubai'))) : true
+                  if(!ok){ setFilterOwner(''); setFilterClient('') }
+                } else if(filterClient){
+                  const cli = clients.find(c => String(c.id) === String(filterClient))
+                  if(cli){
+                    const own = team.find(t => String(t.id) === String(cli.ownerId))
+                    const ok = own ? (v === '' || (v === 'saudi' && String((own as any).team||'').toLowerCase().includes('saudi')) || (v === 'dubai' && String((own as any).team||'').toLowerCase().includes('dubai'))) : true
+                    if(!ok){ setFilterOwner(''); setFilterClient('') }
+                  }
+                }
+              }}
+              className="border rounded px-2 py-1 text-sm bg-white"
+            >
+              <option value="">Market</option>
+              <option value="saudi">Saudi Team</option>
+              <option value="dubai">Dubai Team</option>
+            </select>
             <select
               value={filterOwner}
               onChange={e=>{
