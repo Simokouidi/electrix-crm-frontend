@@ -11,6 +11,7 @@ import dbRouter from './routes/db';
 import botRouter from './routes/bot';
 import usageRouter from './routes/usage';
 import metricsRouter from './routes/metrics';
+import emailRouter from './routes/email';
 import { loadSchema } from './schema'
 import bcrypt from 'bcryptjs';
 
@@ -33,6 +34,7 @@ app.use('/api/db', dbRouter);
 app.use('/api/bot', botRouter());
 app.use('/api/usage', usageRouter);
 app.use('/api/metrics', metricsRouter);
+app.use('/api/email', emailRouter);
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 
