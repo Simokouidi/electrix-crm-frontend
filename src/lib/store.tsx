@@ -1272,8 +1272,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
   const smtpPayload = { to: toEmail, subject, text, html, from: undefined as any, cc }
     try{
       const candidates: string[] = []
+      // Primary: configured API base (env or localStorage override)
       if(API_BASE){ candidates.push(String(API_BASE).replace(/\/$/, '') + '/api/email/send') }
-      // Always also try relative path for environments where a reverse proxy routes /api to backend
+      // Fallback A: optional VITE_FALLBACK_API_BASE (can be set in static hosting env)
+      const FALLBACK = (import.meta as any).env?.VITE_FALLBACK_API_BASE || ''
+      if(FALLBACK){ candidates.push(String(FALLBACK).replace(/\/$/, '') + '/api/email/send') }
+      // Fallback B: meta tag <meta name="api-base" content="https://backend.example.com">
+      try{
+        if(typeof document !== 'undefined'){
+          const meta = document.querySelector('meta[name="api-base"]') as HTMLMetaElement | null
+          const m = meta?.content || ''
+          if(m) candidates.push(String(m).replace(/\/$/, '') + '/api/email/send')
+        }
+      }catch{/* ignore */}
+      // Fallback C: relative path for environments where a reverse proxy routes /api to backend
       candidates.push('/api/email/send')
 
       for(const url of candidates){

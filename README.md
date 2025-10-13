@@ -64,3 +64,39 @@ Notes / Assumptions
 3) Verify
   - Backend: open `/health` → `{ ok: true }`
   - Frontend: Network calls should target `VITE_API_BASE` under `/api/*`.
+
+  ### Production email (SMTP on Railway)
+
+  Ensure these environment variables are set on the backend service (Railway):
+
+  - SMTP_HOST=smtp.office365.com
+  - SMTP_PORT=587
+  - SMTP_SECURE=false
+  - SMTP_USER=your-o365-user@yourdomain.com
+  - SMTP_PASS=app-password-or-secret
+  - FROM_EMAIL=your-o365-user@yourdomain.com
+
+  Optional fallback (legacy endpoint used when SMTP is unavailable):
+
+  - EMAIL_ENDPOINT or CONTACT_ENDPOINT=https://careforce-contact-backend-47e3076b508c.herokuapp.com/contact
+  - EMAIL_TOKEN (or CONTACT_TOKEN)=<shared token required by the fallback>
+
+  Validate server config from your deployed backend:
+
+  - GET /api/email/health → should return `{ ok: true }` if SMTP vars are present
+  - POST /api/email/test with header `X-CRM-Token: <EMAIL_TOKEN>` and body `{ "to": "you@example.com" }`
+
+  There is a helper script you can run from your workstation:
+
+  - PowerShell: `./scripts/prod-email-check.ps1 -BaseUrl "https://<backend>" -Token "<EMAIL_TOKEN>" -To "you@example.com"`
+
+  ### Frontend → Backend API base discovery
+
+  The frontend resolves the backend email endpoint in the following order:
+
+  1) VITE_API_BASE (build-time env)
+  2) VITE_FALLBACK_API_BASE (build-time env)
+  3) A meta tag in index.html: `<meta name="api-base" content="https://backend.example.com"/>`
+  4) Relative path `/api/*` (when routed by a reverse proxy)
+
+  For static hosting without a reverse proxy, prefer setting VITE_FALLBACK_API_BASE or adding the meta tag to `index.html`.
