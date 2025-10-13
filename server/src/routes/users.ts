@@ -3,7 +3,7 @@ import { Server as IOServer } from 'socket.io';
 import { getPool } from '../db';
 import { validatePayload } from '../schema';
 import bcrypt from 'bcryptjs';
-import { sendMail } from '../services/mailer';
+import { sendMail } from '../services';
 
 export default function usersRouter(io: IOServer) {
   const router = Router();

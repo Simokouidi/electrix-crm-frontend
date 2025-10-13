@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { sendMail } from '../services/mailer'
+import { sendMail } from '../services'
 
 const router = Router()
 
@@ -53,21 +53,40 @@ router.post('/send', async (req, res) => {
   try {
     const CONTACT_DEFAULT = 'https://careforce-contact-backend-47e3076b508c.herokuapp.com/contact'
     const endpoint = process.env.EMAIL_ENDPOINT || process.env.CONTACT_ENDPOINT || CONTACT_DEFAULT
-    const toList = Array.isArray(to) ? to : [to]
-    const toSingle = toList.find(Boolean) || ''
-    const message = `Subject: ${subject}\n\n${text || ''}`
-    const payload = { name: from || 'ELECTRIX CRM', email: toSingle, message, website: '', contact_time: new Date().toISOString() }
+    const toList: string[] = (Array.isArray(to) ? to : [to]).filter(Boolean)
+    const ccList: string[] = (Array.isArray(cc) ? cc : (cc ? [cc] : [])).filter(Boolean)
+    const bccList: string[] = (Array.isArray(bcc) ? bcc : (bcc ? [bcc] : [])).filter(Boolean)
+    const allRecipients = [...toList, ...ccList, ...bccList]
+    if(allRecipients.length === 0){
+      return res.status(400).json({ ok: false, error: 'No recipients provided for fallback' })
+    }
     const headers: Record<string,string> = { 'Content-Type': 'application/json', 'User-Agent': 'ElectrixCRM/Server (+https://electrixspace.com)' }
     const token = process.env.EMAIL_TOKEN || process.env.CONTACT_TOKEN || ''
     if(token) headers['X-CRM-Token'] = token
-    const resp = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload) as any })
-    const ok = resp.ok
-    if(!ok){
-      const txt = await resp.text().catch(()=>String(resp.status))
-      console.warn('[Email][Fallback] Failed:', resp.status, txt)
-      return res.status(502).json({ ok: false, error: 'Fallback email failed: ' + txt })
+    const message = `Subject: ${subject}\n\n${text || ''}`
+    let sent = 0
+    let failed: Array<{ rcpt: string; error: string }> = []
+    for(const rcpt of allRecipients){
+      const payload = { name: from || 'ELECTRIX CRM', email: rcpt, message, website: '', contact_time: new Date().toISOString() }
+      try{
+        const resp = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(payload) as any })
+        if(resp.ok){ sent++ } else {
+          const txt = await resp.text().catch(()=>String(resp.status))
+          failed.push({ rcpt, error: txt })
+        }
+      }catch(err:any){
+        failed.push({ rcpt, error: err?.message || 'network error' })
+      }
     }
-    return res.json({ ok: true, via: 'fallback' })
+    if(sent > 0 && failed.length === 0){
+      return res.json({ ok: true, via: 'fallback', sent })
+    }
+    if(sent > 0 && failed.length > 0){
+      return res.status(207).json({ ok: true, via: 'fallback', sent, failed })
+    }
+    const firstErr = failed[0]?.error || 'unknown error'
+    console.warn('[Email][Fallback] All sends failed:', failed)
+    return res.status(502).json({ ok: false, error: 'Fallback email failed: ' + firstErr, failed })
   } catch (e: any) {
     console.warn('[Email][Fallback] Error:', e?.message || e)
     return res.status(500).json({ ok: false, error: e?.message || 'Failed to send email (fallback)' })
