@@ -1,51 +1,44 @@
 import nodemailer from 'nodemailer'
 
-export type MailParams = {
-  to: string | string[]
+export type MailAddress = string | string[]
+export interface MailOptions {
+  to: MailAddress
+  cc?: MailAddress
+  bcc?: MailAddress
   subject: string
-  html?: string
   text?: string
-  cc?: string | string[]
-  bcc?: string | string[]
+  html?: string
+  replyTo?: string
   from?: string
 }
 
-let cachedTransporter: nodemailer.Transporter | null = null
+let transporter: nodemailer.Transporter | null = null
 
-function getTransporter() {
-  if (cachedTransporter) return cachedTransporter
-
+function ensureTransporter(): nodemailer.Transporter {
+  if (transporter) return transporter
   const host = process.env.SMTP_HOST
-  const port = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined
   const user = process.env.SMTP_USER
   const pass = process.env.SMTP_PASS
-  const secure = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true' || (port === 465)
-
-  if (!host || !port || !user || !pass) {
-    throw new Error('SMTP configuration missing. Please set SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS (and optional SMTP_SECURE)')
-  }
-
-  cachedTransporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass },
-  })
-  return cachedTransporter
+  const port = Number(process.env.SMTP_PORT || 587)
+  const secure = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true' || port === 465
+  if (!host || !user || !pass) throw new Error('SMTP not configured')
+  transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } })
+  return transporter
 }
 
-export async function sendMail({ to, subject, html, text, cc, bcc, from }: MailParams) {
-  const transporter = getTransporter()
-  const fromAddr = from || process.env.FROM_EMAIL || process.env.SMTP_USER || 'no-reply@example.com'
+function normalize(v?: MailAddress): string[] | undefined {
+  if (!v) return undefined
+  if (Array.isArray(v)) return v.filter(Boolean)
+  return String(v).split(',').map(s => s.trim()).filter(Boolean)
+}
 
-  const info = await transporter.sendMail({
-    from: fromAddr,
-    to,
-    cc,
-    bcc,
-    subject,
-    text,
-    html,
-  })
+export async function sendMail(opts: MailOptions) {
+  const tx = ensureTransporter()
+  const from = opts.from || process.env.FROM_EMAIL || process.env.SMTP_USER || ''
+  const to = normalize(opts.to)
+  const cc = normalize(opts.cc)
+  const bcc = normalize(opts.bcc)
+  if (!to || to.length === 0) throw new Error('Missing recipient')
+  const info = await tx.sendMail({ from, to, cc, bcc, subject: opts.subject, text: opts.text, html: opts.html, replyTo: opts.replyTo })
   return info
 }

@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import { sendMail } from '../services/mailer'
+import { sendMail } from '../services'
 
 const router = Router()
 
