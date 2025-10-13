@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../lib/store'
 import Button from '../components/Button'
 import Logo from '../Images/Logo_copy2.png'
-import { Eye, EyeOff, Key } from 'lucide-react'
+import { Eye, EyeOff, Key, Globe, Mail, Clock, Building2, MapPin, Shield, Users as UsersIcon, Settings as SettingsIcon, Edit3, Pencil, Trash2, Search, Lock } from 'lucide-react'
 import { getAllowedSettingsTabs } from '../lib/settingsTabs'
 // Crypto-safe password generation
 function generateSecurePassword(len = 12){
@@ -47,6 +47,16 @@ export default function SettingsPage(){
   }, [allowedTabs.join('|')])
 
   const [detected, setDetected] = useState<{ timezone?: string, country?: string, city?: string, region?: string, ip?: string } | null>(null)
+
+  // Market-specific business hours: Owners or All Markets -> universal; Saudi/UAE/Dubai -> Sun–Thu
+  const teamLowerForUser = String((currentUser as any)?.team || '').toLowerCase()
+  const businessHours = useMemo(() => {
+    if(roleLower === 'owner') return 'Mon–Fri 09:00–17:00'
+    if(/all\s*market/.test(teamLowerForUser)) return 'Mon–Fri 09:00–17:00'
+    if(/saudi/.test(teamLowerForUser)) return 'Sun–Thu 09:00–17:00'
+    if(/dubai|uae/.test(teamLowerForUser)) return 'Sun–Thu 09:00–17:00'
+    return 'Mon–Fri 09:00–17:00'
+  }, [roleLower, teamLowerForUser])
 
   // API base: prefer VITE_API_URL, else if running on 4000 use same-origin, otherwise default to local server
   const apiBase = (import.meta as any)?.env?.VITE_API_URL || (window.location.port === '4000' ? '' : 'http://127.0.0.1:4000')
@@ -160,19 +170,20 @@ export default function SettingsPage(){
   const [roles] = useState<string[]>(['User','Admin','Owner'])
   const [teamsState, setTeamsState] = useState<string[]>(['Dubai Sales', 'Saudi Arabia', 'All Markets'])
   const [selected, setSelected] = useState<Record<string, boolean>>({})
+  // Filters & search for Users table
+  const [roleFilter, setRoleFilter] = useState<'All' | RoleName>('All')
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Active' | 'Suspended' | 'Removed' | 'Pending'>('All')
+  const [search, setSearch] = useState<string>('')
   const [showInvite, setShowInvite] = useState(false)
-  const [inviteData, setInviteData] = useState({ name: '', email: '', role: 'User', team: teamsState[0] || '', phone: '', status: 'Active', password: '' as string, lastLogin: '' as string })
+  const [inviteData, setInviteData] = useState({ name: '', email: '', personalEmail: '', role: 'User', team: teamsState[0] || '', phone: '', status: 'Active', password: '' as string, lastLogin: '' as string })
   const [editUser, setEditUser] = useState<User | null>(null)
-  const [editData, setEditData] = useState<{ name: string; email: string; role: string; team: string; phone: string; status: string; password: string; lastLogin: string }>(
-    { name: '', email: '', role: 'User', team: '', phone: '', status: 'Active', password: '', lastLogin: '' }
+  const [editData, setEditData] = useState<{ name: string; email: string; personalEmail: string; role: string; team: string; phone: string; status: string; password: string; lastLogin: string }>(
+    { name: '', email: '', personalEmail: '', role: 'User', team: '', phone: '', status: 'Active', password: '', lastLogin: '' }
   )
   // Users table: show 5 rows with scroll
 
   // simple activity log for demo
-  const [activityLogs, setActivityLogs] = useState<Array<{ id: string; text: string; when: string }>>([
-    { id: 'a1', text: 'Christopher Jones logged in', when: '2025-08-28 14:02' },
-    { id: 'a2', text: 'Ahmed Hassan changed role for Fatima Khan', when: '2025-08-27 11:10' },
-  ])
+  const [activityLogs, setActivityLogs] = useState<Array<{ id: string; text: string; when: string }>>([])
 
   // Table viewport: show 5 rows; scroll for more users
   const ROW_HEIGHT = 64
@@ -214,9 +225,30 @@ export default function SettingsPage(){
       alert('Admins have view-only access. Please contact IT to make any changes.')
       return
     }
-    setEditUser(u)
-    setShowEditPassword(false)
-    setEditData({ name: u.name, email: u.email, role: String(u.role), team: u.teams[0] || '', phone: u.phone || '', status: u.status, password: '', lastLogin: u.lastLogin || '' })
+  setEditUser(u)
+  setShowEditPassword(false)
+  setEditData({ name: u.name, email: u.email, personalEmail: (u as any).personalEmail || (u as any).personal_email || '', role: String(u.role), team: u.teams[0] || '', phone: u.phone || '', status: u.status, password: '', lastLogin: u.lastLogin || '' })
+    // Hydrate latest fields from DB (phone, personal email, team, status, etc.)
+    try{
+      const r = await apiFetch(`/api/users/${u.id}`)
+      if(r.ok){
+        const j = await r.json().catch(()=>null)
+        const row = j && j.data ? j.data : j
+        if(row && typeof row === 'object'){
+          setEditData(d=>({
+            ...d,
+            name: row.name ?? d.name,
+            email: row.email ?? d.email,
+            personalEmail: row.personalEmail || row.personal_email || d.personalEmail,
+            role: String(row.role ?? d.role),
+            team: row.team ?? d.team,
+            phone: row.phone ?? d.phone,
+            status: row.status ?? d.status,
+            lastLogin: row.lastLogin || row.last_login || d.lastLogin,
+          }))
+        }
+      }
+    }catch{/* ignore and keep current */}
     // Only Owners can retrieve password secrets
     if(isOwner){
       try{
@@ -244,6 +276,8 @@ export default function SettingsPage(){
         body: JSON.stringify({
           name: editData.name,
           email: editData.email,
+          personalEmail: editData.personalEmail || undefined,
+          personal_email: editData.personalEmail || undefined,
           role: roleToSend,
           team: editData.team,
           phone: editData.phone,
@@ -282,14 +316,35 @@ export default function SettingsPage(){
               managerId: u.managerId || u.manager_id || u.ManagerId,
               status: u.status || 'Active',
               lastLogin: u.lastLogin || u.last_login || undefined,
-              mfa: !!u.mfa
+              mfa: !!u.mfa,
+              personalEmail: u.personalEmail || u.personal_email
             })))
           }
         }
       }catch{ /* ignore */ }
 
       // Local optimistic update (fallback)
-      setUsers(prev => prev.map(p => p.id===editUser.id ? { ...p, name: editData.name, email: editData.email, role: simplifyRole(editData.role), teams: editData.team ? [editData.team] : [], phone: editData.phone, status: editData.status as any, lastLogin: editData.lastLogin || p.lastLogin } : p))
+  setUsers(prev => prev.map(p => p.id===editUser.id ? { ...p, name: editData.name, email: editData.email, role: simplifyRole(editData.role), teams: editData.team ? [editData.team] : [], phone: editData.phone, status: editData.status as any, lastLogin: editData.lastLogin || p.lastLogin, personalEmail: editData.personalEmail } : p))
+
+      // Log what changed for visibility
+      try{
+        const before = users.find(u=>u.id===editUser.id)
+        const changed: string[] = []
+        if(before){
+          if(before.name !== editData.name) changed.push(`name: "${before.name}" → "${editData.name}"`)
+          if(before.email !== editData.email) changed.push(`email: ${before.email} → ${editData.email}`)
+          if(String(before.role) !== String(editData.role)) changed.push(`role: ${before.role} → ${editData.role}`)
+          if((before.teams?.[0]||'') !== (editData.team||'')) changed.push(`team: ${before.teams?.[0]||'-'} → ${editData.team||'-'}`)
+          if(((before as any).personalEmail||'') !== (editData.personalEmail||'')) changed.push(`personal email: ${(before as any).personalEmail||'-'} → ${editData.personalEmail||'-'}`)
+          if(String(before.status) !== String(editData.status)) changed.push(`status: ${before.status} → ${editData.status}`)
+          if((before.phone||'') !== (editData.phone||'')) changed.push(`phone: ${before.phone||'-'} → ${editData.phone||'-'}`)
+        }
+        const actor = (currentUser as any)?.name || 'System'
+        setActivityLogs(l => [
+          { id: `a_${Date.now()}`, text: `${actor} updated ${editData.email}${changed.length ? ` (${changed.join(', ')})` : ''}`, when: new Date().toLocaleString() },
+          ...l
+        ])
+      }catch{/* ignore */}
 
       const emailNow = editData.email
       setEditUser(null)
@@ -318,7 +373,10 @@ export default function SettingsPage(){
         return
       }
       setUsers(prev => prev.filter(u => u.id !== userId))
-      setActivityLogs(l => [{ id: `a_${Date.now()}`, text: `Deleted user ${email}`, when: new Date().toLocaleString() }, ...l])
+      setActivityLogs(l => [
+        { id: `a_${Date.now()}`, text: `${(currentUser as any)?.name || 'System'} removed access for ${email}`, when: new Date().toLocaleString() },
+        ...l
+      ])
       if(res.status === 404){
         console.warn(`User ${userId} not found in DB; removed locally.`)
       }
@@ -337,7 +395,7 @@ export default function SettingsPage(){
     // Try to persist on the backend first
     try{
       // Send chosen/generated password to server; backend will hash
-      const body:any = { name: inviteData.name, email: inviteData.email, role: roleToSend, phone: inviteData.phone, team: inviteData.team, status: inviteData.status, password: tempPassword, lastLogin: inviteData.lastLogin || undefined }
+  const body:any = { name: inviteData.name, email: inviteData.email, personalEmail: inviteData.personalEmail || undefined, personal_email: inviteData.personalEmail || undefined, role: roleToSend, phone: inviteData.phone, team: inviteData.team, status: inviteData.status, password: tempPassword, lastLogin: inviteData.lastLogin || undefined }
       const res = await apiFetch('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       if(res.ok){
         let meta:any = null
@@ -362,14 +420,18 @@ export default function SettingsPage(){
               managerId: u.managerId || u.manager_id || u.ManagerId,
               status: (u.status as any) || 'Active',
               lastLogin: u.lastLogin || u.last_login || undefined,
-              mfa: !!u.mfa
+              mfa: !!u.mfa,
+              personalEmail: u.personalEmail || u.personal_email
             })))
           }
         }catch{}
-        setActivityLogs(l => [{ id: `a_${Date.now()}`, text: `Access created for ${inviteData.email}`, when: new Date().toLocaleString() }, ...l])
+        setActivityLogs(l => [
+          { id: `a_${Date.now()}`, text: `${(currentUser as any)?.name || 'System'} created access for ${inviteData.email} (${inviteData.role}, ${inviteData.team || 'No Team'})`, when: new Date().toLocaleString() },
+          ...l
+        ])
         // Show credentials modal for copy/share
-        setCredModal({ email: inviteData.email, password: tempPassword, title: 'User Access Created' })
-        setInviteData({ name: '', email: '', role: 'User', team: teamsState[0] || '', phone: '', status: 'Active', password: '', lastLogin: '' })
+  setCredModal({ email: inviteData.email, password: tempPassword, title: 'User Access Created' })
+  setInviteData({ name: '', email: '', personalEmail: '', role: 'User', team: teamsState[0] || '', phone: '', status: 'Active', password: '', lastLogin: '' })
         setShowInvite(false)
         return
       }
@@ -385,10 +447,13 @@ export default function SettingsPage(){
 
     // Fallback: local-only insert in demo mode
     const id = `u_${Math.random().toString(36).slice(2,9)}`
-    setUsers(u => [{ id, name: inviteData.name || inviteData.email.split('@')[0], email: inviteData.email, role: simplifyRole(inviteData.role), teams: inviteData.team ? [inviteData.team] : [], status: inviteData.status as any, mfa: false, phone: inviteData.phone }, ...u])
-    setActivityLogs(l => [{ id: `a_${Date.now()}`, text: `Invite sent to ${inviteData.email}`, when: new Date().toLocaleString() }, ...l])
-    setCredModal({ email: inviteData.email, password: tempPassword, title: 'User Access Created' })
-    setInviteData({ name: '', email: '', role: 'User', team: teamsState[0] || '', phone: '', status: 'Active', password: '', lastLogin: '' })
+  setUsers(u => [{ id, name: inviteData.name || inviteData.email.split('@')[0], email: inviteData.email, role: simplifyRole(inviteData.role), teams: inviteData.team ? [inviteData.team] : [], status: inviteData.status as any, mfa: false, phone: inviteData.phone, personalEmail: inviteData.personalEmail }, ...u])
+    setActivityLogs(l => [
+      { id: `a_${Date.now()}`, text: `${(currentUser as any)?.name || 'System'} created access for ${inviteData.email} (${inviteData.role}, ${inviteData.team || 'No Team'})`, when: new Date().toLocaleString() },
+      ...l
+    ])
+  setCredModal({ email: inviteData.email, password: tempPassword, title: 'User Access Created' })
+  setInviteData({ name: '', email: '', personalEmail: '', role: 'User', team: teamsState[0] || '', phone: '', status: 'Active', password: '', lastLogin: '' })
     setShowInvite(false)
   }
 
@@ -412,7 +477,8 @@ export default function SettingsPage(){
             managerId: u.managerId || u.manager_id || u.ManagerId,
             status: u.status || 'Active',
             lastLogin: u.lastLogin || u.last_login || undefined,
-            mfa: !!u.mfa
+            mfa: !!u.mfa,
+            personalEmail: u.personalEmail || u.personal_email
           })))
         }
       }catch{/* ignore and keep local demo */}
@@ -460,7 +526,7 @@ export default function SettingsPage(){
         securityDefaults: { mfaRequired: true, ssoEnforced: false },
       },
       website: 'https://www.electrixdata.com',
-      version: 'v0.1 prototype',
+  version: 'v0.1',
     }
 
     const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' })
@@ -510,6 +576,52 @@ export default function SettingsPage(){
     return all.filter(u => String(u.id) === meId || String((u.email || '')).toLowerCase() === meEmail)
   }, [users, isOwner, isAdmin, (currentUser as any)?.team, (currentUser as any)?.id, (currentUser as any)?.email])
 
+  // Helpers for UI styling
+  function rolePillClass(role: string){
+    const r = String(role || '').toLowerCase()
+    const base = 'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border'
+    if(r === 'owner') return `${base} bg-slate-900 text-white border-slate-900`
+    if(r === 'admin') return `${base} bg-blue-50 text-blue-700 border-blue-200`
+    return `${base} bg-gray-100 text-gray-700 border-gray-200`
+  }
+  function statusDotClass(status: string){
+    const s = String(status || '').toLowerCase()
+    if(s === 'active') return 'bg-emerald-500'
+    if(s === 'suspended') return 'bg-amber-500'
+    if(s === 'removed') return 'bg-rose-500'
+    return 'bg-slate-400'
+  }
+  function teamTagClass(team: string){
+    const t = String(team || '')
+    const base = 'inline-flex items-center px-2 py-0.5 rounded-full text-xs border'
+    if(/saudi/i.test(t)) return `${base} bg-blue-50 text-blue-700 border-blue-200`
+    if(/all market/i.test(t)) return `${base} bg-gray-100 text-gray-700 border-gray-200`
+    if(/dubai/i.test(t)) return `${base} bg-violet-50 text-violet-700 border-violet-200`
+    return `${base} bg-slate-50 text-slate-700 border-slate-200`
+  }
+
+  // Apply filters and search
+  const displayedUsers = useMemo(() => {
+    let list = effectiveUsers
+    if(roleFilter !== 'All'){
+      const rl = String(roleFilter).toLowerCase()
+      list = list.filter(u => String(u.role || '').toLowerCase() === rl)
+    }
+    if(statusFilter !== 'All'){
+      const st = String(statusFilter).toLowerCase()
+      list = list.filter(u => String(u.status || '').toLowerCase() === st)
+    }
+    if(search.trim()){
+      const q = search.trim().toLowerCase()
+      list = list.filter(u =>
+        (u.name && u.name.toLowerCase().includes(q)) ||
+        (u.email && u.email.toLowerCase().includes(q)) ||
+        (u.phone && u.phone.toLowerCase().includes(q))
+      )
+    }
+    return list
+  }, [effectiveUsers, roleFilter, statusFilter, search])
+
   return (
     <div className="min-h-screen overflow-x-hidden antialiased">
       <div className="max-w-7xl mx-auto px-6">
@@ -518,70 +630,84 @@ export default function SettingsPage(){
   <main className="mt-6 pb-12">
         {tab === 'Organization' && (
           <div className="card p-6">
-            {/* Hero: single logo, name, tagline, actions */}
-            <div className="flex flex-col md:flex-row items-start md:items-center gap-6">
-              <div className="flex items-center gap-4">
-                <div className="w-16 h-16 rounded-lg bg-gradient-to-br from-indigo-600 to-indigo-400 flex items-center justify-center shadow-md">
-                  <img src={Logo} alt="ELECTRIX logo" className="w-10 h-10 object-contain" />
+            {/* Top summary hero */}
+            <div className="rounded-2xl p-3.5 md:p-4 bg-white border border-gray-200 shadow-sm">
+              <div className="flex flex-col lg:flex-row gap-3.5 lg:items-center">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-600 to-indigo-400 flex items-center justify-center shadow-md">
+                    <img src={Logo} alt="ELECTRIX logo" className="w-7 h-7 object-contain" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-bold tracking-tight text-slate-900">ELECTRIX</div>
+                    <div className="text-[12px] text-slate-500">Signal‑to‑Action AI & Data Analytics</div>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-2xl font-bold tracking-tight">ELECTRIX</div>
-                  <div className="text-sm text-slate-400">Signal‑to‑Action AI & Data Analytics</div>
+                <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-2 gap-2">
+                  <div className="flex items-center gap-2 text-slate-700 text-sm">
+                    <Globe size={16} className="text-slate-500" />
+                    <a href="https://www.electrixdata.com" target="_blank" rel="noreferrer" className="text-indigo-600 hover:text-indigo-700">www.electrixdata.com</a>
+                  </div>
+                  {/* Status badge removed per request */}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button onClick={()=>window.open('mailto:Careforce@electrixspace.com')}>Request change</Button>
+                  <Button onClick={downloadConfig}>Download config</Button>
                 </div>
               </div>
-
-              <div className="ml-auto flex items-center gap-2">
-                <Button onClick={()=>window.open('mailto:Careforce@electrixspace.com')} className="bg-indigo-600">Request change</Button>
-                <Button onClick={downloadConfig} className="bg-white/6">Download config</Button>
-                <Button onClick={()=>alert('Open audit log (prototype)')} className="bg-white/6">View audit log</Button>
+              <div className="mt-1.5 flex items-center gap-1.5 text-xs text-slate-500">
+                <Clock size={14} className="text-slate-400" />
+                <span className="text-slate-600">Last updated: Today</span>
               </div>
             </div>
 
-            {/* Main layout: keep style but update fields per request */}
-            <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 p-6 bg-transparent border border-white/6 rounded-2xl shadow-sm">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-                  {/* Core Identity (simplified per request) */}
-                  <div className="p-4 bg-transparent border border-white/6 rounded-lg">
-                    <h3 className="text-lg font-semibold mb-3">Core identity</h3>
-                    <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm text-slate-400">
-                      <div>
-                        <div className="text-slate-400">Organization name</div>
-                        <div className="mt-1 font-medium text-slate-100">ELECTRIX</div>
-                      </div>
-
-                      <div>
-                        <div className="text-slate-400">Primary domain</div>
-                        <div className="mt-1 font-medium">www.electrixdata.com</div>
-                      </div>
-
-                      <div>
-                        <div className="text-slate-400">Legal entity</div>
-                        <div className="mt-1 font-medium">Electrix Data</div>
-                      </div>
-
-                      <div>
-                        <div className="text-slate-400">Industry / sector</div>
-                        <div className="mt-1 font-medium">Software</div>
-                      </div>
-
-                      <div className="sm:col-span-2">
-                        <div className="text-slate-400">Registered address</div>
-                        <div className="mt-1 font-medium">Commercial Building, 317-319 Des Voeux Road, Central, Hong Kong</div>
-                      </div>
-                    </dl>
+            {/* Grouped content cards */}
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {/* Organization Profile */}
+              <div className="p-3 rounded-2xl border border-gray-200 bg-white">
+                <div className="text-[11px] tracking-wider text-slate-500">ORGANIZATION</div>
+                <h3 className="mt-0.5 text-[15px] font-semibold text-slate-900">Organization Profile</h3>
+                <dl className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[13.5px]">
+                  <div className="flex items-start gap-2">
+                    <Building2 size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Legal entity</div>
+                      <div className="font-medium text-slate-900">Electrix Data</div>
+                    </div>
                   </div>
+                  <div className="flex items-start gap-2">
+                    <Globe size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Industry</div>
+                      <div className="font-medium text-slate-900">Software</div>
+                    </div>
+                  </div>
+                  <div className="sm:col-span-2 flex items-start gap-2">
+                    <MapPin size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Registered address</div>
+                      <div className="font-medium text-slate-900">Commercial Building, 317-319 Des Voeux Road, Central, Hong Kong</div>
+                    </div>
+                  </div>
+                </dl>
+              </div>
 
-                  {/* Regional defaults: timezone/locale based on IP/browser; currency/fiscal/holidays removed */}
-                  <div className="p-4 bg-transparent border border-white/6 rounded-lg">
-                    <h3 className="text-lg font-semibold mb-2">Regional & operational defaults</h3>
-                    <dl className="grid grid-cols-2 gap-y-3 gap-x-4 text-sm">
-                      <div className="text-slate-400">Timezone</div>
-                      <div className="font-medium">{detected?.timezone ?? 'Detecting...'}</div>
-
-                      <div className="text-slate-400">Local time zone</div>
-                      <div className="font-medium">
+              {/* Operational Settings (merged system info) */}
+              <div className="p-3 rounded-2xl border border-gray-200 bg-white">
+                <div className="text-[11px] tracking-wider text-slate-500">OPERATIONS</div>
+                <h3 className="mt-0.5 text-[15px] font-semibold text-slate-900">Operational Settings</h3>
+                <dl className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[13.5px]">
+                  <div className="flex items-start gap-2">
+                    <Clock size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Timezone</div>
+                      <div className="font-medium text-slate-900">{detected?.timezone ?? 'Detecting...'}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Clock size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Local time</div>
+                      <div className="font-medium text-slate-900">
                         {(() => {
                           const tz = detected?.timezone
                           const locale = navigator.language || 'en-GB'
@@ -590,66 +716,110 @@ export default function SettingsPage(){
                               const formatted = new Intl.DateTimeFormat(locale, { dateStyle: 'short', timeStyle: 'short', timeZone: tz }).format(new Date())
                               return formatted
                             }
-                          } catch (e) {
-                            // fallback
-                          }
-                          // fallback: show local time string
+                          } catch (e) { /* fallback */ }
                           return new Date().toLocaleString()
                         })()}
                       </div>
-
-                      <div className="text-slate-400">Business hours</div>
-                      <div className="font-medium">Mon–Fri 09:00–17:00</div>
-                    </dl>
+                    </div>
                   </div>
-                </div>
-
-                {/* Governance / compliance block full width */}
-                <div className="mt-6 p-4 bg-transparent border border-white/6 rounded-lg">
-                  <h3 className="text-lg font-semibold mb-2">Governance & compliance</h3>
-                  <dl className="grid grid-cols-2 gap-y-3 gap-x-4 text-sm">
-                    <div className="text-slate-400">Data residency</div>
-                    <div className="font-medium">Hong Kong / Dubai</div>
-
-                    <div className="text-slate-400">Data retention</div>
-                    <div className="font-medium">Inactive records are kept for 18 months</div>
-
-                    <div className="text-slate-400">Audit log retention</div>
-                    <div className="font-medium">1 year</div>
-
-                    <div className="text-slate-400">Privacy contact</div>
-                    <div className="font-medium">Careforce@electrixspace.com</div>
-
-                    <div className="text-slate-400">Security defaults</div>
-                    <div className="font-medium">MFA required: Yes · SSO enforced: No</div>
-                  </dl>
-                </div>
-
-                
+                  <div className="flex items-start gap-2">
+                    <SettingsIcon size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Business hours</div>
+                      <div className="font-medium text-slate-900">{businessHours}</div>
+                    </div>
+                  </div>
+                  {/* System version removed per request */}
+                </dl>
               </div>
 
-              {/* Right column: quick metadata, system info, website */}
-              <aside className="p-4 bg-transparent border border-white/6 rounded-2xl shadow-sm sticky top-24">
-                <div className="mb-4">
-                  <div className="text-sm text-slate-400">System</div>
-                  <div className="font-medium">v0.1 prototype</div>
-                </div>
+              {/* Governance & Security (full width) */}
+              <div className="md:col-span-2 p-3 rounded-2xl border border-gray-200 bg-white">
+                <div className="text-[11px] tracking-wider text-slate-500">SECURITY</div>
+                <h3 className="mt-0.5 text-[15px] font-semibold text-slate-900">Governance & Security</h3>
+                <dl className="mt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-[13.5px]">
+                  <div className="flex items-start gap-2">
+                    <Shield size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Data residency</div>
+                      <div className="font-medium text-slate-900">Hong Kong / Dubai</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Shield size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Data retention</div>
+                      <div className="font-medium text-slate-900">Inactive records are kept for 18 months</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Shield size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Audit log retention</div>
+                      <div className="font-medium text-slate-900">1 year</div>
+                    </div>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Mail size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Privacy contact</div>
+                      <div className="font-medium text-slate-900">Careforce@electrixspace.com</div>
+                    </div>
+                  </div>
+                  <div className="sm:col-span-2 flex items-start gap-2">
+                    <Shield size={16} className="mt-0.5 text-slate-500" />
+                    <div>
+                      <div className="text-slate-500">Security defaults</div>
+                      <div className="font-medium text-slate-900">MFA required: Yes · SSO enforced: No</div>
+                    </div>
+                  </div>
+                </dl>
+              </div>
+            </div>
 
-                <div className="mb-4">
-                  <div className="text-sm text-slate-400">Website</div>
-                  <div className="font-medium"><a href="https://www.electrixdata.com" target="_blank" rel="noreferrer" className="text-indigo-300">www.electrixdata.com</a></div>
-                </div>
+            {/* Quick actions */}
+              <div className="mt-3">
+              <div className="text-[11px] tracking-wider text-slate-500">QUICK ACTIONS</div>
+              <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                <button
+                  className="group text-left p-2.5 rounded-xl bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 transition"
+                  onClick={()=> setSelectedSettingsTab('Users & Access' as any)}
+                >
+                  <div className="flex items-center gap-2 text-slate-900">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center">
+                      <UsersIcon size={16} />
+                    </div>
+                    <div className="font-medium text-slate-900">Manage users</div>
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">Shortcut to access settings</div>
+                </button>
 
-                <div className="mb-4">
-                  <div className="text-sm text-slate-400">Support</div>
-                  <div className="font-medium">Careforce@electrixspace.com</div>
-                </div>
+                <button
+                  className="group text-left p-2.5 rounded-xl bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 transition"
+                  onClick={()=> setSelectedSettingsTab('Audit & Security' as any)}
+                >
+                  <div className="flex items-center gap-2 text-slate-900">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center">
+                      <Shield size={16} />
+                    </div>
+                    <div className="font-medium text-slate-900">Security center</div>
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">MFA, SSO and audit</div>
+                </button>
 
-                <div>
-                  <div className="text-sm text-slate-400">Last config update</div>
-                  <div className="font-medium">Today — prototype</div>
-                </div>
-              </aside>
+                <button
+                  className="group text-left p-2.5 rounded-xl bg-white border border-gray-200 hover:border-indigo-300 hover:bg-indigo-50/40 transition"
+                  onClick={()=> window.open('mailto:Careforce@electrixspace.com')}
+                >
+                  <div className="flex items-center gap-2 text-slate-900">
+                    <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-700 flex items-center justify-center">
+                      <Edit3 size={16} />
+                    </div>
+                    <div className="font-medium text-slate-900">Edit profile</div>
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">Request organization info changes</div>
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -657,74 +827,97 @@ export default function SettingsPage(){
         {tab !== 'Organization' && (
           <div>
             {tab === 'Users & Access' ? (
-              <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-200">
+              <>
+              <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
+                {/* Page header with CTA */}
                 <div className="flex items-center justify-between">
                   <div>
-                    <h2 className="text-2xl font-semibold text-slate-800">Users & Access</h2>
-                    <div className="text-sm text-slate-500">Manage users, roles, teams and security settings.</div>
+                    <h2 className="text-xl font-semibold text-slate-900">Users & Access</h2>
+                    <div className="text-sm text-slate-500">Manage users, roles, teams, and security settings.</div>
                     {!isPrivileged && (
-                      <div className="mt-1 inline-flex items-center gap-2 text-xs text-slate-500 bg-slate-100 px-2 py-1 rounded">
+                      <div className="mt-1 inline-flex items-center gap-2 text-xs text-slate-600 bg-slate-100 px-2 py-1 rounded">
                         RLS active: you can only see and edit your own account
                       </div>
                     )}
                   </div>
-
-                  {/* header actions removed as requested */}
-                </div>
-
-                <div className="mt-8 p-6 bg-gray-50 rounded-xl">
-                  <div className="flex items-center justify-between">
-                    {isOwner && (
-                      <button
-                      className="bg-indigo-600 text-white px-4 py-2 rounded-md"
+                  {isOwner && (
+                    <button
+                      className="inline-flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white bg-gradient-to-r from-[#3B82F6] via-[#6366F1] to-[#8B5CF6] shadow-[0_6px_18px_rgba(99,102,241,0.35)] hover:shadow-[0_10px_30px_rgba(99,102,241,0.45),0_0_12px_rgba(139,92,246,0.35)] hover:-translate-y-0.5"
                       onClick={()=>{ setInviteData(d=>({ ...d, password: generateSecurePassword(12) })); setShowInvitePassword(false); setShowInvite(true) }}
                     >
-                      Add User Access
+                      + Add User Access
                     </button>
-                    )}
-                    <div className="text-sm text-slate-600">{effectiveUsers.length} users</div>
-                  </div>
+                  )}
+                </div>
+                <div className="mt-3 border-t border-gray-200" />
 
-                  <div className="mt-6 overflow-hidden rounded-xl border border-gray-200 bg-white">
+                {/* Totals breakdown */}
+                <div className="mt-3 text-xs text-slate-600">
+                  {(() => {
+                    const all = effectiveUsers
+                    const cOwner = all.filter(u=>String(u.role).toLowerCase()==='owner').length
+                    const cAdmin = all.filter(u=>String(u.role).toLowerCase()==='admin').length
+                    const cUser = all.filter(u=>String(u.role).toLowerCase()==='user').length
+                    return `${all.length} users · ${cOwner} Owners · ${cAdmin} Admins · ${cUser} Users`
+                  })()}
+                </div>
+
+                {/* Filter bar */}
+                <div className="mt-3 p-3 bg-gray-50 rounded-xl">
+                  <div className="flex flex-col md:flex-row md:items-center gap-2">
+                    <select value={roleFilter} onChange={e=>setRoleFilter(e.target.value as any)} className="px-3 py-2 rounded-md border border-gray-200 text-sm bg-white">
+                      {['All','Owner','Admin','User'].map(r => <option key={r}>{r}</option>)}
+                    </select>
+                    <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value as any)} className="px-3 py-2 rounded-md border border-gray-200 text-sm bg-white">
+                      {['All','Active','Suspended','Removed'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                    <div className="relative md:ml-auto">
+                      <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search name or email" className="pl-9 pr-3 py-2 rounded-md border border-gray-200 text-sm bg-white min-w-[220px]" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-white">
                     {/* Fixed-height viewport with scroll to show 5 rows */}
                     <div style={{ maxHeight: `${VISIBLE_ROWS * ROW_HEIGHT}px` }} className="overflow-y-auto">
                       <table className="w-full text-sm">
-                        <thead className="bg-gray-100 text-gray-600 sticky top-0 z-10">
+                        <thead className="bg-gray-100 text-gray-700 sticky top-0 z-10">
                           <tr>
-                            <th className="px-4 py-3 text-left">Name</th>
-                            <th className="px-4 py-3 text-left">Email</th>
+                            <th className="px-4 py-3 text-left">Name & Email</th>
                             <th className="px-4 py-3 text-left">Phone</th>
                             <th className="px-4 py-3 text-left">Role</th>
                             <th className="px-4 py-3 text-left">Team</th>
-                              <th className="px-4 py-3 text-left">Status</th>
+                            <th className="px-4 py-3 text-left">Status</th>
                             <th className="px-4 py-3 text-left">Last Login</th>
                             <th className="px-4 py-3 text-left">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y">
-                          {effectiveUsers.map(u => (
+                          {displayedUsers.map(u => (
                             <tr key={u.id} className="bg-white hover:bg-gray-50">
-                              <td className="px-4 py-3 align-middle font-medium">{u.name}</td>
-                              <td className="px-4 py-3 align-middle text-slate-600">{u.email}</td>
+                              <td className="px-4 py-3 align-middle">
+                                <div className="font-medium text-slate-900">{u.name}</div>
+                                <div className="text-xs text-slate-500">{u.email}</div>
+                              </td>
                               <td className="px-4 py-3 align-middle text-slate-600">{u.phone || '—'}</td>
-                              <td className="px-4 py-3 align-middle">{u.role}</td>
-                              <td className="px-4 py-3 align-middle text-slate-600">{u.teams.join(', ') || '—'}</td>
-                                <td className="px-4 py-3 align-middle text-slate-600">{u.status}</td>
+                              <td className="px-4 py-3 align-middle">
+                                <span className={rolePillClass(u.role)}>{u.role}</span>
+                              </td>
+                              <td className="px-4 py-3 align-middle text-slate-600">
+                                {u.teams.length ? (
+                                  <span className={teamTagClass(u.teams[0])}>{u.teams[0]}</span>
+                                ) : '—'}
+                              </td>
+                              <td className="px-4 py-3 align-middle">
+                                <span className="inline-flex items-center gap-2"><span className={`w-2 h-2 rounded-full ${statusDotClass(u.status)}`}></span><span className="text-slate-700 text-sm">{u.status}</span></span>
+                              </td>
                               <td className="px-4 py-3 align-middle text-slate-600">{u.lastLogin ? new Date(u.lastLogin).toLocaleString() : 'Never'}</td>
                               <td className="px-4 py-3 align-middle">
                                 <div className="flex items-center justify-end gap-2">
-                                  {/* Edit button first */}
-                                  <button onClick={()=>openEdit(u)} className="px-3.5 py-1.5 rounded-md border text-sm text-slate-700 bg-white hover:bg-gray-50">Edit</button>
-                                  {/* Delete (X) button second */}
+                                  <button title="Edit" aria-label={`Edit ${u.email}`} onClick={()=>openEdit(u)} className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-gray-200 text-slate-700 hover:bg-gray-50"><Pencil size={16}/></button>
                                   {isOwner && (
-                                    <button
-                                    title="Delete user"
-                                    aria-label={`Delete ${u.email}`}
-                                    onClick={()=>setConfirmDeleteUser({ id: u.id, email: u.email })}
-                                    className="inline-flex items-center justify-center w-7 h-7 rounded border border-red-200 text-red-600 hover:bg-red-50"
-                                  >
-                                    ×
-                                  </button>
+                                    <button title="Delete" aria-label={`Delete ${u.email}`} onClick={()=>setConfirmDeleteUser({ id: u.id, email: u.email })} className="inline-flex items-center justify-center w-8 h-8 rounded-md border border-red-200 text-red-600 hover:bg-red-50"><Trash2 size={16}/></button>
                                   )}
                                 </div>
                               </td>
@@ -739,60 +932,43 @@ export default function SettingsPage(){
                 </div>
 
                 {/* Right columns below main list */}
-                <div className="mt-8 grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
                   <div className="lg:col-span-2">
-                    <div className="mt-2 p-6 bg-white border border-gray-100 rounded-xl">
-                      <h3 className="font-semibold">User account</h3>
-                      <div className="mt-3 space-y-3 text-sm text-slate-600">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium">Enforce MFA</div>
-                            <div className="text-xs text-slate-400">Require MFA for users</div>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" />
-                            <div className="w-11 h-6 bg-gray-200 rounded-full peer-checked:bg-indigo-600"></div>
-                          </label>
+                    <div className="mt-0 p-5 bg-white border border-gray-200 rounded-xl">
+                      <div className="flex items-center gap-2">
+                        <Lock size={18} className="text-slate-500" />
+                        <h3 className="font-semibold text-slate-800">User Account Security</h3>
+                      </div>
+                      <div className="mt-3 space-y-2.5 text-sm text-slate-700">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Enforce MFA</span>
+                          <span className="text-xs text-slate-500">Require MFA for all users</span>
                         </div>
-
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium">Require password reset at first login</div>
-                            <div className="text-xs text-slate-400">Temporary passwords must be reset</div>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" />
-                            <div className="w-11 h-6 bg-gray-200 rounded-full peer-checked:bg-indigo-600"></div>
-                          </label>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Reset password on first login</span>
+                          <span className="text-xs text-slate-500">Temporary passwords must be changed</span>
                         </div>
-
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <div className="font-medium">SSO (optional)</div>
-                            <div className="text-xs text-slate-400">Connect via SAML / OIDC</div>
-                          </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" />
-                            <div className="w-11 h-6 bg-gray-200 rounded-full peer-checked:bg-indigo-600"></div>
-                          </label>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">Enable SSO</span>
+                          <span className="text-xs text-slate-500">SAML / OIDC</span>
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <aside className="p-6 bg-white border border-gray-100 rounded-xl">
-                    <h3 className="font-semibold">Activity Logs</h3>
-                    <div className="mt-3 space-y-3 text-sm text-slate-600">
+                  <aside className="p-5 bg-white border border-gray-200 rounded-xl">
+                    <div className="flex items-center gap-2">
+                      <Clock size={18} className="text-slate-500" />
+                      <h3 className="font-semibold text-slate-800">Activity Logs</h3>
+                    </div>
+                    <div className="mt-3 space-y-2.5 text-sm text-slate-700">
                       {activityLogs.slice(0,5).map(a => (
-                        <div key={a.id} className="flex items-start justify-between">
+                        <div key={a.id} className="flex items-start gap-2">
+                          <span className="mt-1 w-2 h-2 rounded-full bg-slate-400 inline-block" />
                           <div>
-                            <div className="text-sm">{a.text}</div>
+                            <div className="text-sm font-medium text-slate-800">{a.text}</div>
                             <div className="text-xs text-slate-400">{a.when}</div>
                           </div>
-                          <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" className="sr-only peer" defaultChecked />
-                            <div className="w-11 h-6 bg-gray-200 rounded-full peer-checked:bg-indigo-600"></div>
-                          </label>
                         </div>
                       ))}
                       <div className="mt-2">
@@ -805,23 +981,31 @@ export default function SettingsPage(){
                 {/* Invite modal (admins/owners only) */}
                 {isOwner && showInvite && (
                   <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
-                    <form onSubmit={inviteSubmit} className="bg-white p-6 rounded-xl shadow-xl w-full max-w-md">
-                      <h3 className="text-lg font-semibold mb-2 text-slate-800">Add User Access</h3>
-                      <div className="text-sm text-slate-500 mb-4">Set the user's details. Password is optional here; if provided, it's hashed on save. Status defaults to Active.</div>
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-sm text-slate-600">Name</label>
-                          <input placeholder="Full name" value={inviteData.name} onChange={(e)=>setInviteData(d=>({...d, name: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
+                    <form onSubmit={inviteSubmit} className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-xl">
+                      <h3 className="text-2xl font-semibold text-slate-900">Add User Access</h3>
+                      <div className="text-sm text-slate-500 mt-1">Set the user's details. Password is optional here; if provided, it's hashed on save. Status defaults to Active.</div>
+                      <div className="mt-4 grid grid-cols-1 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm text-slate-600">Name</label>
+                            <input placeholder="Full name" value={inviteData.name} onChange={(e)=>setInviteData(d=>({...d, name: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-600">Email</label>
+                            <input required value={inviteData.email} onChange={(e)=>setInviteData(d=>({...d, email: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-sm text-slate-600">Email</label>
-                          <input required value={inviteData.email} onChange={(e)=>setInviteData(d=>({...d, email: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm text-slate-600">Personal Email</label>
+                            <input placeholder="user@gmail.com (optional)" value={inviteData.personalEmail} onChange={(e)=>setInviteData(d=>({...d, personalEmail: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-600">Phone</label>
+                            <input placeholder="+971 50 000 0000" value={inviteData.phone} onChange={(e)=>setInviteData(d=>({...d, phone: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-sm text-slate-600">Phone</label>
-                          <input placeholder="+971 50 000 0000" value={inviteData.phone} onChange={(e)=>setInviteData(d=>({...d, phone: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-sm text-slate-600">Role</label>
                             <select value={inviteData.role} onChange={(e)=>setInviteData(d=>({...d, role: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200">
@@ -836,7 +1020,7 @@ export default function SettingsPage(){
                             </select>
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 items-start">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
                           <div>
                             <label className="block text-sm text-slate-600">Status</label>
                             <select value={inviteData.status} onChange={(e)=>setInviteData(d=>({...d, status: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200">
@@ -875,14 +1059,11 @@ export default function SettingsPage(){
                             <div className="text-xs text-slate-400 mt-1">Use the key to generate; use the eye to show/hide.</div>
                           </div>
                         </div>
-                        <div>
-                          <label className="block text-sm text-slate-600">Last login (optional)</label>
-                          <input type="datetime-local" value={inviteData.lastLogin} onChange={(e)=>setInviteData(d=>({...d, lastLogin: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" />
-                        </div>
+                        {/* Removed Last login from form per request */}
                       </div>
-                      <div className="mt-4 flex items-center gap-2 justify-end">
-                        <button type="button" className="text-sm text-slate-600" onClick={()=>setShowInvite(false)}>Cancel</button>
-                        <button className="px-4 py-2 rounded-md bg-indigo-600 text-white" disabled={isAdmin} title={isAdmin ? 'Admins cannot add users' : undefined}>Create Access</button>
+                      <div className="mt-5 flex items-center gap-3 justify-end">
+                        <button type="button" className="text-sm text-slate-700 px-3 py-2 rounded-lg hover:bg-slate-100" onClick={()=>setShowInvite(false)}>Cancel</button>
+                        <button className="inline-flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white bg-gradient-to-r from-[#3B82F6] via-[#6366F1] to-[#8B5CF6] shadow-[0_6px_18px_rgba(99,102,241,0.35)] hover:shadow-[0_10px_30px_rgba(99,102,241,0.45),0_0_12px_rgba(139,92,246,0.35)] transition-all duration-200 hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-[#8B5CF6]/40" disabled={isAdmin} title={isAdmin ? 'Admins cannot add users' : undefined}>Create Access</button>
                       </div>
                     </form>
                   </div>
@@ -891,22 +1072,30 @@ export default function SettingsPage(){
                 {/* Edit modal */}
                 {editUser && (
                   <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
-                    <form onSubmit={handleEditSubmit} className="bg-white p-6 rounded-xl shadow-xl w-full max-w-md">
-                      <h3 className="text-lg font-semibold mb-2 text-slate-800">Edit User Access</h3>
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-sm text-slate-600">Name</label>
-                          <input value={editData.name} onChange={(e)=>setEditData(d=>({...d, name: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
+                    <form onSubmit={handleEditSubmit} className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-xl">
+                      <h3 className="text-2xl font-semibold text-slate-900">Edit User Access</h3>
+                      <div className="mt-4 grid grid-cols-1 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm text-slate-600">Name</label>
+                            <input value={editData.name} onChange={(e)=>setEditData(d=>({...d, name: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-600">Email</label>
+                            <input value={editData.email} onChange={(e)=>setEditData(d=>({...d, email: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-sm text-slate-600">Email</label>
-                          <input value={editData.email} onChange={(e)=>setEditData(d=>({...d, email: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm text-slate-600">Personal Email</label>
+                            <input value={editData.personalEmail} onChange={(e)=>setEditData(d=>({...d, personalEmail: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
+                          </div>
+                          <div>
+                            <label className="block text-sm text-slate-600">Phone</label>
+                            <input value={editData.phone} onChange={(e)=>setEditData(d=>({...d, phone: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
+                          </div>
                         </div>
-                        <div>
-                          <label className="block text-sm text-slate-600">Phone</label>
-                          <input value={editData.phone} onChange={(e)=>setEditData(d=>({...d, phone: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                           <div>
                             <label className="block text-sm text-slate-600">Role</label>
                             <select value={editData.role} onChange={(e)=>setEditData(d=>({...d, role: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin}>
@@ -921,7 +1110,7 @@ export default function SettingsPage(){
                             </select>
                           </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-3 items-start">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 items-start">
                           <div>
                             <label className="block text-sm text-slate-600">Status</label>
                             <select value={editData.status} onChange={(e)=>setEditData(d=>({...d, status: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin}>
@@ -939,7 +1128,7 @@ export default function SettingsPage(){
                                   onChange={(e)=>setEditData(d=>({...d, password: e.target.value}))}
                                   className="w-full rounded px-3 py-2 border border-gray-200 pr-20"
                                 />
-                                  <button
+                                <button
                                   type="button"
                                   title={showEditPassword ? 'Hide password' : 'Show password'}
                                   aria-label={showEditPassword ? 'Hide password' : 'Show password'}
@@ -963,14 +1152,11 @@ export default function SettingsPage(){
                             </div>
                           )}
                         </div>
-                        <div>
-                          <label className="block text-sm text-slate-600">Last login</label>
-                          <input type="datetime-local" value={editData.lastLogin} onChange={(e)=>setEditData(d=>({...d, lastLogin: e.target.value}))} className="mt-1 w-full rounded px-3 py-2 border border-gray-200" disabled={isAdmin} />
-                        </div>
+                        {/* Removed Last login field per request */}
                       </div>
-                      <div className="mt-4 flex items-center gap-2 justify-end">
-                        <button type="button" className="text-sm text-slate-600" onClick={()=>setEditUser(null)}>Cancel</button>
-                        <button className="px-4 py-2 rounded-md bg-indigo-600 text-white" disabled={isAdmin} title={isAdmin ? 'Admins have view-only access. Contact IT for changes.' : undefined}>Save</button>
+                      <div className="mt-5 flex items-center gap-3 justify-end">
+                        <button type="button" className="text-sm text-slate-700 px-3 py-2 rounded-lg hover:bg-slate-100" onClick={()=>setEditUser(null)}>Cancel</button>
+                        <button className="inline-flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white bg-gradient-to-r from-[#3B82F6] via-[#6366F1] to-[#8B5CF6] shadow-[0_6px_18px_rgba(99,102,241,0.35)] hover:shadow-[0_10px_30px_rgba(99,102,241,0.45),0_0_12px_rgba(139,92,246,0.35)] transition-all duration-200 hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-[#8B5CF6]/40" disabled={isAdmin} title={isAdmin ? 'Admins have view-only access. Contact IT for changes.' : undefined}>Save</button>
                       </div>
                     </form>
                   </div>
@@ -993,10 +1179,10 @@ export default function SettingsPage(){
                 {/* Credentials copy modal (after create/reset) */}
                 {credModal && (
                   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-                    <div className="bg-white p-6 rounded-xl shadow-xl w-full max-w-lg">
-                      <h3 className="text-lg font-semibold text-slate-800">{credModal.title}</h3>
+                    <div className="bg-white p-6 rounded-2xl shadow-xl w-full max-w-2xl">
+                      <h3 className="text-2xl font-semibold text-slate-900">{credModal.title}</h3>
                       <p className="mt-1 text-sm text-slate-600">Share the following access details with the user. For security, they should change their password after first login.</p>
-                      <div className="mt-4 bg-gray-50 border border-gray-200 rounded p-3 text-sm">
+                      <div className="mt-4 bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-sm">
                         <div className="flex items-center justify-between gap-2">
                           <div><span className="text-slate-500">Email:</span> <span className="font-medium text-slate-800">{credModal.email}</span></div>
                         </div>
@@ -1011,14 +1197,14 @@ export default function SettingsPage(){
                             title={showCredPassword ? 'Hide password' : 'Show password'}
                             aria-label={showCredPassword ? 'Hide password' : 'Show password'}
                             onClick={()=>setShowCredPassword(s=>!s)}
-                            className="w-9 h-9 inline-flex items-center justify-center rounded border text-slate-600 hover:bg-gray-100 flex-shrink-0"
+                            className="w-9 h-9 inline-flex items-center justify-center rounded-lg border text-slate-600 hover:bg-gray-100 flex-shrink-0"
                             style={{lineHeight:0}}
                           >
                             {showCredPassword ? <EyeOff size={18} className="opacity-80"/> : <Eye size={18} className="opacity-80"/>}
                           </button>
                         </div>
                         <div className="mt-3 text-slate-600">Message:</div>
-                        <pre className="mt-1 whitespace-pre-wrap break-words bg-white border border-gray-200 rounded p-2">{`Hello,
+                        <pre className="mt-1 whitespace-pre-wrap break-words bg-white border border-gray-200 rounded-lg p-2.5">{`Hello,
 
 Your ELECTRIX CRM access has been set up.
 
@@ -1031,17 +1217,15 @@ ${window.location.origin}/change-password?email=${credModal.email}
 Thank you,
 ELECTRIX Admin`}</pre>
                       </div>
-                      <div className="mt-4 flex items-center justify-between gap-2">
-                        <button className="px-3 py-2 rounded border text-slate-700" onClick={()=>{ const text = `Email: ${credModal.email}\nTemporary password: ${credModal.password}\nChange password: ${window.location.origin}/change-password?email=${credModal.email}`; navigator.clipboard?.writeText(text).catch(()=>{}); }}>Copy details</button>
-                        <div className="flex items-center gap-2">
-                          <a className="text-indigo-600" href={`/change-password?email=${encodeURIComponent(credModal.email)}`} target="_blank" rel="noreferrer">Open change password</a>
-                          <button className="px-4 py-2 rounded-md bg-indigo-600 text-white" onClick={()=>setCredModal(null)}>Done</button>
-                        </div>
+                      <div className="mt-5 flex items-center justify-between gap-3">
+                        <button className="px-3 py-2 rounded-lg border text-slate-700 hover:bg-slate-50" onClick={()=>{ const text = `Email: ${credModal.email}\nTemporary password: ${credModal.password}\nChange password: ${window.location.origin}/change-password?email=${credModal.email}`; navigator.clipboard?.writeText(text).catch(()=>{}); }}>Copy details</button>
+                        <a className="text-indigo-600 hover:text-indigo-700" href={`/change-password?email=${encodeURIComponent(credModal.email)}`} target="_blank" rel="noreferrer">Open change password</a>
+                        <button className="inline-flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-white bg-gradient-to-r from-[#3B82F6] via-[#6366F1] to-[#8B5CF6] shadow-[0_6px_18px_rgba(99,102,241,0.35)] hover:shadow-[0_10px_30px_rgba(99,102,241,0.45),0_0_12px_rgba(139,92,246,0.35)] transition-all duration-200 hover:-translate-y-0.5 focus:outline-none focus:ring-4 focus:ring-[#8B5CF6]/40" onClick={()=>setCredModal(null)}>Done</button>
                       </div>
                     </div>
                   </div>
                 )}
-              </div>
+              </>
             ) : (
               <div className="bg-white rounded-2xl p-6 border border-gray-200">
                 <div className="flex items-center justify-between">

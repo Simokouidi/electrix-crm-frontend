@@ -175,6 +175,8 @@ export default function ActivitiesPage(){
   const { sendWhatsApp } = useStore()
   const { notifyStatusChange, notifyAssignment } = useStore()
   const [sending, setSending] = useState(false)
+  const [showToast, setShowToast] = useState<string | null>(null)
+  const [pendingError, setPendingError] = useState<string | null>(null)
   // page size control like Clients: 10 / 20 / All
   const [pageSize, setPageSize] = useState<number | 'All'>(10)
 
@@ -321,6 +323,119 @@ export default function ActivitiesPage(){
     return list
   }, [pendingChange, activities, team, currentUser])
 
+  // Build email preview to reflect primary To and CC (admins by market + Simo) similar to backend logic
+  const pendingEmailPreview = React.useMemo(() => {
+    if(!pendingChange) return { to: null as null | { name?: string; email?: string; personalEmail?: string; phone?: string }, cc: [] as { name?: string; email?: string; personalEmail?: string; phone?: string }[] }
+    const act = activities.find(a => a.id === pendingChange.id)
+    if(!act) return { to: null, cc: [] as any[] }
+    // Helpers
+    const roleOf = (u: any) => String(u?.role || '').toLowerCase()
+    const teamOf = (u: any) => String(u?.team || '').toLowerCase()
+    const emailOf = (u: any) => String((u?.email || (u && (u as any).Email) || '')).trim()
+    const personalOf = (u: any) => String(((u && (u as any).personalEmail) || (u && (u as any).personal_email) || '')).trim()
+    const phoneOf = (u: any) => String((u?.phone || (u && (u as any).Phone) || '')).trim()
+    const uniqBy = <T,>(arr: T[], key: (t:T)=>string) => {
+      const seen = new Set<string>()
+      const out: T[] = []
+      for(const it of arr){ const k = key(it); const kl = String(k||'').toLowerCase(); if(!seen.has(kl)){ seen.add(kl); out.push(it) } }
+      return out
+    }
+    const adminsForTeam = (teamLower: string) => team.filter(u => roleOf(u) === 'admin' && teamOf(u) === teamLower)
+    // Base list shown in the old preview (manager + owners for status, owner for assignment)
+    const baseList = pendingRecipients
+    // Determine primary TO
+    let to: { name?: string; email?: string; personalEmail?: string; phone?: string } | null = null
+    if(pendingChange.field === 'assignment'){
+      // Owner is primary recipient for assignment notifications
+      const ownerUser = team.find(t => String(t.id) === String(act.ownerId)) || null
+      to = ownerUser ? { name: ownerUser.name, email: emailOf(ownerUser), personalEmail: personalOf(ownerUser), phone: phoneOf(ownerUser) } : (baseList[0] || null)
+    } else {
+      // Status: prefer manager if present (first in baseList), else an Owner
+      const first = baseList[0]
+      if(first){
+        // Try to resolve a full team user to get personalEmail
+        const match = team.find(u => emailOf(u).toLowerCase() === String(first.email||'').toLowerCase())
+          || team.find(u => String((u.name||'')).toLowerCase() === String(first.name||'').toLowerCase())
+          || null
+        to = match ? { name: match.name, email: emailOf(match), personalEmail: personalOf(match), phone: phoneOf(match) } : first
+      } else {
+        to = null
+      }
+    }
+    // CC list: everyone else from base list (by email/phone) + Simo + admins of relevant market
+    const isSameContact = (a?: { email?: string; phone?: string }, b?: { email?: string; phone?: string }) => {
+      if(!a || !b) return false
+      const ae = String(a.email || '').toLowerCase().trim()
+      const be = String(b.email || '').toLowerCase().trim()
+      const ap = String(a.phone || '').trim()
+      const bp = String(b.phone || '').trim()
+      return (!!ae && ae === be) || (!!ap && ap === bp)
+    }
+    const baseCC = baseList.filter(r => !(to && isSameContact(r, to)))
+    const cc: { name?: string; email?: string; personalEmail?: string; phone?: string }[] = [...baseCC]
+    // Add Simo (default CC)
+    const simo = team.find(u => String((u.email||'')).toLowerCase() === 'simo.kouidi@electrixspace.com') || { name: 'Simo Kouidi', email: 'simo.kouidi@electrixspace.com' } as any
+    if(simo){
+      const candidate = { name: simo.name || 'Simo Kouidi', email: emailOf(simo), personalEmail: personalOf(simo), phone: phoneOf(simo) }
+      if(!(to && isSameContact(candidate, to))) cc.push(candidate)
+    }
+    // Market admins
+    if(pendingChange.field === 'assignment'){
+      // CC admins of the assignee's market/team when assigning
+      const assigneeKey = String(pendingChange.newValue || '')
+      const assignee = team.find(t => String(t.id) === assigneeKey) || team.find(t => String((t.name||'')).toLowerCase() === assigneeKey.toLowerCase()) || null
+      const tname = assignee ? teamOf(assignee) : ''
+      if(tname) adminsForTeam(tname).forEach(a => {
+        const cand = { name: a.name, email: emailOf(a), personalEmail: personalOf(a), phone: phoneOf(a) }
+        if(!(to && isSameContact(cand, to))) cc.push(cand)
+      })
+      // CC the manager of the assignee (if available)
+      if(assignee && assignee.managerId){
+        const managerUser = team.find(u => String(u.id) === String(assignee.managerId)) || null
+        if(managerUser){
+          const cand = { name: managerUser.name, email: emailOf(managerUser), personalEmail: personalOf(managerUser), phone: phoneOf(managerUser) }
+          if(!(to && isSameContact(cand, to))) cc.push(cand)
+        }
+      }
+    } else {
+      // Status: CC admins of the changer's market/team
+      const tname = teamOf(currentUser)
+      if(tname) adminsForTeam(tname).forEach(a => {
+        const cand = { name: a.name, email: emailOf(a), personalEmail: personalOf(a), phone: phoneOf(a) }
+        if(!(to && isSameContact(cand, to))) cc.push(cand)
+      })
+    }
+    // Deduplicate CC by email/phone and ensure To is not present in CC
+    const ccUniq = uniqBy(cc.filter(x => x && (x.email || x.phone) && !(to && isSameContact(x, to))), x => (x.email ? x.email.toLowerCase().trim() : (x.phone || '').trim()))
+    // Resolve personalEmail for any base recipients lacking it by matching in team
+    const enrich = (r: any) => {
+      if(r && !r.personalEmail){
+        const match = team.find(u => emailOf(u).toLowerCase() === String(r.email||'').toLowerCase())
+          || team.find(u => String((u.name||'')).toLowerCase() === String(r.name||'').toLowerCase())
+          || null
+        if(match){ return { ...r, personalEmail: personalOf(match) } }
+      }
+      return r
+    }
+    return { to: enrich(to), cc: ccUniq.map(enrich) }
+  }, [pendingChange, pendingRecipients, activities, team, currentUser])
+
+  // Phone display formatter: split into country code + blocks of 4 for readability when possible
+  function formatPhoneDisplay(ph?: string){
+    const s = String(ph || '').replace(/\s+/g,'').trim()
+    if(!s) return ''
+    if(/^\+\d{5,}$/.test(s)){
+      const m = s.match(/^\+(\d{1,3})(\d{4,})$/)
+      if(m){
+        const cc = m[1]
+        const rest = m[2]
+        const blocks = rest.match(/\d{1,4}/g) || [rest]
+        return `+${cc} ${blocks.join(' ')}`
+      }
+    }
+    return s
+  }
+
   function beginChange(id: string, field: 'status'|'assignment', oldValue?: string, newValue?: string){
     setPendingChange({ id, field, oldValue, newValue })
     setChangeNote('')
@@ -331,13 +446,14 @@ export default function ActivitiesPage(){
 
   async function confirmPending(){
     if(!pendingChange) return
-    if(changeNote.trim() === '') return alert('Please leave a note explaining the change (mandatory).')
+    if(changeNote.trim() === '') { setPendingError('Please leave a note explaining the change (mandatory).'); return }
     // If changing assignment require a cut-off date selection
     if(pendingChange.field === 'assignment'){
-      if(!pendingCutoff) return alert('Please select a cut-off date for the new assignment.')
+      if(!pendingCutoff) { setPendingError('Please select a cut-off date for the new assignment.'); return }
     }
     const { id, field, oldValue, newValue } = pendingChange
     setSending(true)
+    setPendingError(null)
     try{
       if(field === 'status' || field === 'both'){
   const updated = await updateActivity(id, { status: (field === 'status' ? newValue : (newValue || undefined)) as any })
@@ -359,16 +475,19 @@ export default function ActivitiesPage(){
   // usage: assignment change
   sendUsage('assignment_change', { activityId: id, from: oldValue, to: newValue, cutoff: cutoffDate, assigneeId, note: changeNote }).catch(()=>{})
   }
-      alert('Change saved and notification sent.')
+      // Success: quick toast and close the modal for a snappier UX
+      setShowToast('Change saved and notifications sent')
+      setTimeout(() => setShowToast(null), 2500)
+      // close and reset fields
+      setPendingChange(null)
+      setChangeNote('')
+      setPendingCutoff('')
     }catch(err:any){
       // eslint-disable-next-line no-console
       console.error('Send failed', err)
       const msg = err?.message || String(err)
-      alert('Change saved but sending notification failed: ' + msg + '\n\nCheck DevTools Console and Network tab for request/response details.')
+      setPendingError('Change saved but sending notification failed: ' + msg)
     } finally {
-      setPendingChange(null)
-      setChangeNote('')
-      setPendingCutoff('')
       setSending(false)
     }
   }
@@ -957,47 +1076,86 @@ export default function ActivitiesPage(){
 
       {/* Mandatory change note modal */}
       {pendingChange && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center">
-          <div className="absolute inset-0 bg-black/40" onClick={cancelPending} />
-          <div className="relative z-50 max-w-md w-full bg-white rounded-lg p-4 shadow-lg">
-            <h4 className="font-semibold mb-2">Please add a note</h4>
-            <p className="text-sm text-slate-500 mb-3">A note is required when changing {pendingChange.field}.</p>
-            {pendingRecipients.length > 0 && (
-              <div className="mb-3 text-xs text-slate-400">
-                <div className="mb-1">Will send to:</div>
-                <ul className="space-y-1">
-                  {pendingRecipients.map(r => (
-                    <li key={r.phone} className="flex items-center gap-2">
-                      <span className="text-slate-400">{r.name}</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="text-slate-400">{r.phone}</span>
-                      {r.email ? (<>
-                        <span className="text-slate-300">·</span>
-                        <span className="text-slate-400">{r.email}</span>
-                      </>) : null}
-                    </li>
-                  ))}
-                  {/* Always CC */}
-                  <li className="flex items-center gap-2">
-                    <span className="text-slate-400">Simo Kouidi (CC)</span>
-                    <span className="text-slate-300">·</span>
-                    <span className="text-slate-400">simo.kouidi@electrixspace.com</span>
-                  </li>
-                </ul>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3">
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={cancelPending} />
+          <div className="relative z-50 max-w-xl w-full bg-gradient-to-br from-white/95 to-slate-50/95 rounded-2xl p-5 shadow-2xl ring-1 ring-slate-200" style={{ boxShadow: '0 12px 30px rgba(2,6,23,0.25), inset 0 1px 0 rgba(255,255,255,0.6)' }}>
+            <div className="flex items-start justify-between mb-3">
+              <div>
+                <h4 className="text-lg font-semibold">Please add a note</h4>
+                <p className="text-sm text-slate-500">A note is required when changing <strong>{pendingChange.field}</strong>.</p>
+              </div>
+              <button className="text-sm text-slate-600 px-3 py-2 rounded-md hover:bg-slate-100" onClick={cancelPending}>Close</button>
+            </div>
+            {/* Recipients preview */}
+            {(pendingRecipients.length > 0) && (
+              <div className="mb-3">
+                <div className="text-xs text-slate-500 mb-1">Notifications will be sent as:</div>
+                <div className="rounded-lg border border-slate-200 bg-white p-2">
+                  {/* To */}
+                  {pendingEmailPreview.to && (
+                    <div className="mb-2">
+                      <div className="text-[11px] uppercase tracking-wide font-semibold text-slate-500">To</div>
+                      <div className="text-sm text-slate-700">
+                        <div className="font-medium">{pendingEmailPreview.to.name || 'Recipient'}</div>
+                        {pendingEmailPreview.to.phone && (<div className="text-slate-600">{formatPhoneDisplay(pendingEmailPreview.to.phone)}</div>)}
+                        {pendingEmailPreview.to.email && (<div className="text-slate-600">{pendingEmailPreview.to.email}</div>)}
+                        {pendingEmailPreview.to.personalEmail && (<div className="text-slate-600">{pendingEmailPreview.to.personalEmail}</div>)}
+                      </div>
+                    </div>
+                  )}
+                  {/* CC */}
+                  {pendingEmailPreview.cc && pendingEmailPreview.cc.length > 0 && (
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wide font-semibold text-slate-500">CC</div>
+                      <ul className="mt-1 space-y-2">
+                        {pendingEmailPreview.cc.map((r, idx) => (
+                          <li key={(r.email || r.phone || '') + idx} className="text-sm text-slate-700">
+                            <div className="font-medium">{r.name || '—'}</div>
+                            {r.phone && (<div className="text-slate-600">{formatPhoneDisplay(r.phone)}</div>)}
+                            {r.email && (<div className="text-slate-600">{r.email}</div>)}
+                            {r.personalEmail && (<div className="text-slate-600">{r.personalEmail}</div>)}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
             {pendingChange.field === 'assignment' && (
               <div className="mb-3">
-                <label className="block text-sm text-slate-600 mb-1">Cut-off date (required)</label>
-                <input type="date" className="w-full border p-2 rounded" value={pendingCutoff} onChange={e=>setPendingCutoff(e.target.value)} />
+                <label className="block text-sm text-slate-700 mb-1">Cut-off date <span className="text-rose-600">(required)</span></label>
+                <input type="date" className="w-full border border-slate-300 p-2 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" value={pendingCutoff} onChange={e=>setPendingCutoff(e.target.value)} />
                 <p className="text-xs text-slate-400 mt-1">When changing assignment, status will be set to Planned and cut-off is required.</p>
               </div>
             )}
-            <textarea className="w-full border p-2 rounded mb-3" value={changeNote} onChange={e=>setChangeNote(e.target.value)} />
-            <div className="flex justify-end gap-2">
-              <button className="px-3 py-1 rounded bg-slate-100" onClick={cancelPending}>Cancel</button>
-              <button className="px-3 py-1 rounded bg-sky-600 text-white" onClick={confirmPending}>Save</button>
+            <div className="mb-3">
+              <label className="block text-sm text-slate-700 mb-1">Note <span className="text-rose-600">(required)</span></label>
+              <textarea className="w-full border border-slate-300 p-3 rounded-lg text-sm h-24 focus:ring-2 focus:ring-sky-500 focus:border-sky-500 outline-none" value={changeNote} onChange={e=>setChangeNote(e.target.value)} placeholder="Add context about this change for the team..." />
+              {pendingError && (
+                <div className="mt-2 p-2 rounded bg-rose-50 border border-rose-200 text-rose-700 text-sm">{pendingError}</div>
+              )}
             </div>
+            <div className="flex justify-end gap-2">
+              <button className="px-3 py-2 rounded-md text-slate-700 hover:bg-slate-100" onClick={cancelPending} disabled={sending}>Cancel</button>
+              <button className={`px-3 py-2 rounded-md text-white ${sending ? 'bg-sky-400 cursor-not-allowed' : 'bg-sky-600 hover:bg-sky-700'}`} onClick={confirmPending} disabled={sending}>
+                {sending ? (
+                  <span className="inline-flex items-center gap-2">
+                    <svg className="animate-spin h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path></svg>
+                    Saving...
+                  </span>
+                ) : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Success toast */}
+      {showToast && (
+        <div className="fixed bottom-4 right-4 z-[60]">
+          <div className="p-3 text-sm rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 shadow">
+            <span>{showToast}</span>
           </div>
         </div>
       )}

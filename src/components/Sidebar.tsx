@@ -142,7 +142,7 @@ export default function Sidebar(): JSX.Element {
         })}
       </ul>
 
-      <div className="mt-4 text-sm text-white/70">v0.1 prototype</div>
+      {/* Version label removed per request */}
     </nav>
   )
 }

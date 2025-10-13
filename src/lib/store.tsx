@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useState } from '
 import { v4 as uuid } from 'uuid'
 import { io as ioClient } from 'socket.io-client'
 
-export type TeamMember = { id: string; name: string; email?: string; avatarUrl?: string; role?: string; phone?: string; password?: string; managerId?: string; team?: string }
+export type TeamMember = { id: string; name: string; email?: string; personalEmail?: string; avatarUrl?: string; role?: string; phone?: string; password?: string; managerId?: string; team?: string }
 export type CompanySize = '1-50'|'51-200'|'201-1000'|'1001+'
 export type PipelineStage = 'Discovery'|'Qualifying'|'Proposal Sent'|'Negotiation'|'Contracting'|'Live'
 export type Status = 'Planned'|'In Progress'|'Completed'|'Canceled'|'Postponed'|'Prospect'
@@ -253,9 +253,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     }catch{ return null }
   })
 
-  // Initialize API base from env. During local development, default to the backend on port 4000
-  // so the frontend's fetch() calls reach the Express server (avoids proxy/misrouting issues).
-  let API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+  // Initialize API base:
+  // 1) Allow runtime override via localStorage 'API_BASE' (handy for static hosting + separate API origin)
+  // 2) Use VITE_API_BASE if provided at build time
+  // 3) During local development, default to the backend on port 4000
+  let API_BASE = ''
+  try{
+    if(typeof window !== 'undefined'){
+      const ls = localStorage.getItem('API_BASE')
+      if(ls) API_BASE = ls
+    }
+  }catch{/* ignore storage errors */}
+  if(!API_BASE){
+    API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+  }
   if(!API_BASE && typeof window !== 'undefined'){
     const host = (window.location && window.location.hostname) || 'localhost'
     if(host === 'localhost' || host === '127.0.0.1'){
@@ -365,6 +376,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     if(out.id !== undefined && out.id !== null) out.id = String(out.id)
     // Preserve common fields like role, email, team/market if present
     if(out.team === undefined && (row.Team || row.market)) out.team = row.Team || row.market
+    // Map DB personal_email -> personalEmail for frontend use
+    if(out.personalEmail === undefined && (row.personal_email !== undefined || (row as any).PersonalEmail !== undefined)){
+      out.personalEmail = row.personal_email ?? (row as any).PersonalEmail
+    }
     return out
   }
 
@@ -810,6 +825,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
               const cutDateOnly = cutoffDateOnly ? String(cutoffDateOnly).slice(0,10) : null
               await fetch(baseUrl + '/api/clients/' + idPath, withUserHeaders({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next_followup: cutDateOnly }) }))
               setClients(prev => prev.map(c => String(c.id) === String(clientIdVal) ? { ...c, nextFollowUpDate: cutDateOnly ? new Date(cutDateOnly).toISOString() : null } : c))
+              // Business rule: when a new cut-off is set (moving from Postponed), client becomes In Progress
+              const desiredStatus: Client['status'] = 'In Progress'
+              try{
+                await fetch(baseUrl + '/api/clients/' + idPath, withUserHeaders({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: desiredStatus, Status: desiredStatus }) }))
+              }catch(_){ /* non-fatal */ }
+              setClients(prev => prev.map(c => String(c.id) === String(clientIdVal) ? { ...c, status: desiredStatus } : c))
             }
           }catch(_){ /* ignore sync errors */ }
           return na
@@ -907,6 +928,26 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
             const cutDateOnlyStr = cutoffDateOnly ? String(cutoffDateOnly).slice(0,10) : null
             await fetch(baseUrl + '/api/clients/' + idPath, withUserHeaders({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ next_followup: cutDateOnlyStr }) }))
             setClients(prev => prev.map(c => String(c.id) === String(clientIdForSync) ? { ...c, nextFollowUpDate: cutDateOnlyStr ? new Date(cutDateOnlyStr).toISOString() : null } : c))
+
+            // Also reflect activity status onto the client status in DB and locally
+            let desiredStatus: Client['status'] | null = null
+            if(patch && typeof patch.status !== 'undefined'){
+              const s = String(patch.status) as Activity['status']
+              if(s === 'Completed') desiredStatus = 'Completed'
+              else if(s === 'Canceled') desiredStatus = 'Canceled'
+              else if(s === 'In Progress') desiredStatus = 'In Progress'
+              else if(s === 'Postponed') desiredStatus = 'Postponed'
+            }
+            // If a cut-off date is set and not postponed, treat client as In Progress
+            if(!desiredStatus && patch && patch.cut_off_date && statusMerged !== 'Postponed'){
+              desiredStatus = 'In Progress'
+            }
+            if(desiredStatus){
+              try{
+                await fetch(baseUrl + '/api/clients/' + idPath, withUserHeaders({ method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: desiredStatus, Status: desiredStatus }) }))
+              }catch(_){ /* ignore */ }
+              setClients(prev => prev.map(c => String(c.id) === String(clientIdForSync) ? { ...c, status: desiredStatus as Client['status'] } : c))
+            }
           }
         }catch(_){ /* ignore sync errors */ }
         return na
@@ -1158,6 +1199,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
   const getPhone = (u?: any) => String(u?.phone || u?.Phone || '').trim()
   const getEmail = (u?: any) => String(u?.email || u?.Email || '').trim()
   const uniq = (arr: string[]) => Array.from(new Set(arr.filter(Boolean)))
+  // Helper: get admin emails for a team/market (e.g., 'saudi arabia', 'dubai sales')
+  function getAdminEmailsForTeam(teamNameLower?: string){
+    const t = String(teamNameLower || '').toLowerCase()
+    if(!t) return [] as string[]
+    return uniq(team
+      .filter(u => getRole(u) === 'admin' && getTeamName(u) === t)
+      .map(u => getEmail(u))
+      .filter(e => e && !EXCLUDED_RECIPIENTS.emails.has(String(e).toLowerCase())))
+  }
   const normalizePhone = (p: string) => {
     const s = (p || '').trim()
     if(!s) return s
@@ -1179,55 +1229,115 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     return false
   }
 
-  // Email sending via Heroku contact endpoint
+  // Email sending via backend SMTP (nodemailer) on Heroku/your server
   const EMAIL_ENDPOINT_DEFAULT = 'https://careforce-contact-backend-47e3076b508c.herokuapp.com/contact'
-  function getEmailEndpoint(){
-    if(typeof window !== 'undefined'){
-      const ls = localStorage.getItem('EMAIL_ENDPOINT')
-      if(ls) return ls
-    }
-    const env = (import.meta as any).env?.VITE_EMAIL_ENDPOINT
-    return env || EMAIL_ENDPOINT_DEFAULT
-  }
-  async function sendEmailHeroku(toEmail: string, toName: string, subject: string, text: string){
-    if(!toEmail) return { ok: false, skipped: true }
-    const endpoint = getEmailEndpoint()
-    // Include subject at the top of the message body since the endpoint doesn't accept a subject field
-    const message = `Subject: ${subject}\n\n${text}`
-    const payload = {
-      name: toName || 'ELECTRIX CRM',
-      email: toEmail,
-      message,
-      website: '',
-      contact_time: new Date().toISOString()
-    }
-    try{
-      const hdrs: Record<string,string> = { 'Content-Type': 'application/json' }
-      // Provide contextual headers that some backends use in anti-spam heuristics
+  // Build a professional HTML email aligned with WhatsApp text
+  function buildEmailHtml(subject: string, bodyText: string){
+    // Convert text with newlines into simple HTML paragraphs, bold key emoji lines
+    const esc = (s:string)=> s
+      .replace(/&/g,'&amp;')
+      .replace(/</g,'&lt;')
+      .replace(/>/g,'&gt;')
+    const lines = (bodyText || '').split('\n')
+    const htmlLines = lines.map((ln) => {
+      const trimmed = ln.trim()
+      if(!trimmed) return '<br/>'
+      let isLabel = false
       try{
-        if(typeof window !== 'undefined'){
-          hdrs['Origin'] = window.location.origin
-          hdrs['Referer'] = window.location.href
-        }
-      }catch{}
-      hdrs['User-Agent'] = 'ElectrixCRM/1.0 (+https://electrixspace.com)'
-      // Optional backend bypass token if configured
-      let token = ''
-      try{ if(typeof window !== 'undefined') token = localStorage.getItem('EMAIL_TOKEN') || '' }catch{}
-      token = token || (import.meta as any).env?.VITE_EMAIL_TOKEN || ''
-      if(token) hdrs['X-CRM-Token'] = token
-
-      const res = await fetch(endpoint, { method: 'POST', headers: hdrs, body: JSON.stringify(payload) })
-      const ok = res.ok
-      if(!ok){
-        const t = await res.text().catch(()=>String(res.status))
-        console.warn('[Email][Heroku] Failed', res.status, t)
+        isLabel = new RegExp('^[\\u{1F300}-\\u{1FAFF}]|^[A-Za-z]+:', 'u').test(trimmed)
+      }catch{ // environments without unicode flag support
+        isLabel = /^[A-Za-z]+:/.test(trimmed)
       }
-      return { ok }
+      return `<p style=\"margin:6px 0;\">${isLabel ? '<strong>' + esc(trimmed) + '</strong>' : esc(trimmed)}</p>`
+    }).join('')
+    const signature = `
+      <hr style=\"border:none;border-top:1px solid #e5e7eb;margin:16px 0;\"/>
+      <p style=\"margin:6px 0;color:#111827;\"><strong>ELECTRIX CRM</strong></p>
+      <p style=\"margin:2px 0;color:#374151;\">This is an automated notification from ELECTRIX CRM.</p>
+      <p style=\"margin:2px 0;color:#6b7280;\">© ${new Date().getFullYear()} Electrix Space</p>
+    `
+    return `
+      <div style=\"font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111827;\">
+        <h2 style=\"margin:0 0 12px 0;font-size:18px;\">${esc(subject)}</h2>
+        ${htmlLines}
+        ${signature}
+      </div>
+    `
+  }
+
+  async function sendEmailHeroku(toEmail: string | string[], toName: string, subject: string, text: string, cc?: string[]){
+    if(!toEmail) return { ok: false, skipped: true }
+    // Prefer our backend SMTP endpoint (try configured API_BASE, then relative /api in case of reverse proxy)
+  const html = buildEmailHtml(subject, text)
+  const smtpPayload = { to: toEmail, subject, text, html, from: undefined as any, cc }
+    try{
+      const candidates: string[] = []
+      if(API_BASE){ candidates.push(String(API_BASE).replace(/\/$/, '') + '/api/email/send') }
+      // Always also try relative path for environments where a reverse proxy routes /api to backend
+      candidates.push('/api/email/send')
+
+      for(const url of candidates){
+        try{
+          const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(smtpPayload) })
+          if(res.ok){ return { ok: true } }
+          const t = await res.text().catch(()=>String(res.status))
+          console.warn('[Email][SMTP] Failed', res.status, t, 'via', url)
+        }catch(e){
+          console.warn('[Email][SMTP] Error calling', url, e)
+        }
+      }
     }catch(err){
-      console.warn('[Email][Heroku] Error', err)
-      return { ok: false, error: String(err) }
+      console.warn('[Email][SMTP] Unexpected error (pre-fallback)', err)
     }
+
+  // Fallback: legacy contact endpoint (form-like API)
+    const endpoint = (function(){
+      if(typeof window !== 'undefined'){
+        const ls = localStorage.getItem('EMAIL_ENDPOINT')
+        if(ls) return ls
+      }
+      const env = (import.meta as any).env?.VITE_EMAIL_ENDPOINT
+      return env || EMAIL_ENDPOINT_DEFAULT
+    })()
+    // Legacy contact endpoint does not support CC; if multiple recipients are provided,
+    // send one request per recipient to ensure delivery to all (corp + personal).
+    const recipients: string[] = Array.isArray(toEmail) ? toEmail.filter(Boolean) : [toEmail].filter(Boolean)
+    let allOk = true
+    for(const toSingle of recipients){
+      const message = `Subject: ${subject}\n\n${text}`
+      const payload = {
+        name: toName || 'ELECTRIX CRM',
+        email: toSingle,
+        message,
+        website: '',
+        contact_time: new Date().toISOString()
+      }
+      try{
+        const hdrs: Record<string,string> = { 'Content-Type': 'application/json' }
+        try{
+          if(typeof window !== 'undefined'){
+            hdrs['Origin'] = window.location.origin
+            hdrs['Referer'] = window.location.href
+          }
+        }catch{}
+        hdrs['User-Agent'] = 'ElectrixCRM/1.0 (+https://electrixspace.com)'
+        let token = ''
+        try{ if(typeof window !== 'undefined') token = localStorage.getItem('EMAIL_TOKEN') || '' }catch{}
+        token = token || (import.meta as any).env?.VITE_EMAIL_TOKEN || ''
+        if(token) hdrs['X-CRM-Token'] = token
+        const res = await fetch(endpoint, { method: 'POST', headers: hdrs, body: JSON.stringify(payload) })
+        const ok = res.ok
+        if(!ok){
+          const t = await res.text().catch(()=>String(res.status))
+          console.warn('[Email][Legacy] Failed', res.status, t)
+          allOk = false
+        }
+      }catch(err){
+        console.warn('[Email][Legacy] Error', err)
+        allOk = false
+      }
+    }
+    return { ok: allOk }
   }
 
   // Global CC list for all outbound emails
@@ -1321,36 +1431,28 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     if(typeof window !== 'undefined') console.debug('[NotifyStatus] Recipients (phones):', phones)
     for(const ph of phones){
       if(!ph) continue
-      try{ await sendWhatsApp(ph, message) }catch(_){/* logged in sendWhatsApp */}
+      try{ await sendWhatsApp(ph, message) }catch(err){ if(typeof window !== 'undefined') console.warn('[NotifyStatus] WhatsApp send failed (continue with email):', err) }
       if(activity.status === 'Postponed'){
         const extra = '\n\n⚠️ Action required: Please discuss with BDM to set a new cut-off date.'
-        try{ await sendWhatsApp(ph, message + extra) }catch(_){/* ignore */}
+        try{ await sendWhatsApp(ph, message + extra) }catch(err){ if(typeof window !== 'undefined') console.warn('[NotifyStatus] WhatsApp extra send failed:', err) }
       }
     }
 
     // Email: send to emails via Heroku endpoint
     const emailUsers = [managerUser, ...ownersUsers].filter(Boolean) as TeamMember[]
-    let emails = uniq(emailUsers
-      .map(u => getEmail(u))
-      .filter(e => e && !EXCLUDED_RECIPIENTS.emails.has(String(e).toLowerCase())))
-    // Always include CCs
-    const emailsLowerSet = new Set(emails.map(e => String(e).toLowerCase()))
-    for(const cc of CC_EMAILS_DEFAULT){
-      const lc = String(cc).toLowerCase()
-      if(!emailsLowerSet.has(lc)) emails.push(cc)
-    }
-    if(emails.length){
+    const corpEmails = emailUsers.map(u => getEmail(u)).filter(e => e && !EXCLUDED_RECIPIENTS.emails.has(String(e).toLowerCase()))
+    const personalEmails = emailUsers.map(u => String((u as any).personalEmail || '')).filter(e => e && !EXCLUDED_RECIPIENTS.emails.has(String(e).toLowerCase()))
+    const toList = uniq([...corpEmails, ...personalEmails])
+    if(toList.length){
+      // CC defaults and market admins as organizational visibility
+      const ccSet = new Set<string>()
+      CC_EMAILS_DEFAULT.forEach(cc => ccSet.add(cc))
+      if(changerTeam){ getAdminEmailsForTeam(changerTeam).forEach(e => ccSet.add(e)) }
+      const ccList = Array.from(ccSet)
       const subject = 'ELECTRIX CRM — Client Status Updated'
-      const textExtra = activity.status === 'Postponed'
-        ? '\n\nAction required: Please discuss with BDM to set a new cut-off date.'
-        : ''
+      const textExtra = activity.status === 'Postponed' ? '\n\nAction required: Please discuss with BDM to set a new cut-off date.' : ''
       const text = message + textExtra + '\n\nThis is an automated notification from ELECTRIX CRM.'
-      for(const e of emails){
-        const eLc = String(e).toLowerCase()
-        const u = emailUsers.find(u => (getEmail(u) || '').toLowerCase() === eLc) || team.find(u => (getEmail(u) || '').toLowerCase() === eLc) || null
-        const name = (u?.name) || (eLc === 'simo.kouidi@electrixspace.com' ? 'Simo Kouidi (CC)' : 'Recipient')
-        await sendEmailHeroku(String(e), name, subject, text)
-      }
+      await sendEmailHeroku(toList, 'Recipients', subject, text, ccList)
     }
   }
 
@@ -1379,22 +1481,36 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     // Recipient: activity owner phone as requested
     const recipient = ownerPhone
     if(typeof window !== 'undefined') console.debug('[NotifyAssign] Recipient:', recipient, 'Assigned to', assignee?.name)
-    if(recipient){ await sendWhatsApp(recipient, message) }
+    try{
+      if(recipient){ await sendWhatsApp(recipient, message) }
+    }catch(err){
+      if(typeof window !== 'undefined') console.warn('[NotifyAssign] WhatsApp send failed, continuing with email', err)
+    }
     // Email to owner as well
     const ownerEmail = getEmail(ownerUser)
-    const emailsToSend: string[] = []
-    if(ownerEmail && !EXCLUDED_RECIPIENTS.emails.has(ownerEmail.toLowerCase())) emailsToSend.push(ownerEmail)
-    // Always CC
-    for(const cc of CC_EMAILS_DEFAULT){ if(!emailsToSend.some(e => e.toLowerCase() === cc.toLowerCase())) emailsToSend.push(cc) }
-    if(emailsToSend.length){
+    const ownerPersonal = String((ownerUser as any)?.personalEmail || '')
+    const toList = uniq([ownerEmail, ownerPersonal].filter(Boolean))
+    if(toList.length && (!ownerEmail || !EXCLUDED_RECIPIENTS.emails.has(ownerEmail.toLowerCase()))){
       const subject = 'ELECTRIX CRM — New Task Assigned'
       const text = message + '\n\nPlease log in to ELECTRIX CRM to review and take action.'
-      for(const e of emailsToSend){
-        const eLc = e.toLowerCase()
-        const u = team.find(u => (getEmail(u) || '').toLowerCase() === eLc) || null
-        const name = (u?.name) || (eLc === 'simo.kouidi@electrixspace.com' ? 'Simo Kouidi (CC)' : 'Recipient')
-        await sendEmailHeroku(e, name, subject, text)
-      }
+      // CC Simo (and any defaults) rather than sending separate emails
+  const ccSet = new Set<string>()
+  CC_EMAILS_DEFAULT.forEach(cc => ccSet.add(cc))
+  // CC admin(s) of the assignee's team/market as well, if known
+  const assigneeTeam = getTeamName(assignee || ownerUser)
+  if(assigneeTeam){ getAdminEmailsForTeam(assigneeTeam).forEach(e => ccSet.add(e)) }
+      // CC the manager as well (ensure not duplicating the primary To)
+      try{
+        let managerUser: TeamMember | null = team.find(t => String(t.id) === String(managerId)) || null
+        if(!managerUser){ managerUser = await fetchUserByIdNoRls(String(managerId)) }
+        const mEmail = managerUser ? getEmail(managerUser) : ''
+        const mPersonal = managerUser ? String((managerUser as any).personalEmail || '') : ''
+        if(mEmail && (!ownerEmail || mEmail.toLowerCase() !== ownerEmail.toLowerCase()) && !EXCLUDED_RECIPIENTS.emails.has(mEmail.toLowerCase())) ccSet.add(mEmail)
+        if(mPersonal && (!ownerPersonal || mPersonal.toLowerCase() !== ownerPersonal.toLowerCase()) && !EXCLUDED_RECIPIENTS.emails.has(mPersonal.toLowerCase())) ccSet.add(mPersonal)
+      }catch{ /* ignore manager lookup issues */ }
+      const ccList = Array.from(ccSet)
+      const name = (ownerUser?.name) || 'Recipient'
+      await sendEmailHeroku(toList, name, subject, text, ccList)
     }
   }
   
@@ -1411,7 +1527,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }){
     const base = API_BASE || ''
     // Dev-only quick bypass: ensure Admin/Admin can log in immediately in local dev
     const devMode = (import.meta as any).env?.VITE_DEV_MODE === 'true' || (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
-    if(devMode && username === 'Admin' && password === 'Admin'){
+    // Dev-only bypass credentials (local testing):
+    // Username can be one of: 'Admin', 'Admin@local', or 'Electrix2025'
+    // Password must be the strong value below.
+    const DEV_BYPASS_PASSWORD = 'ElectrixData2025@CRMv0.1'
+    const allowedDevUsers = ['Admin', 'Admin@local', 'Electrix2025']
+    if(devMode && allowedDevUsers.some(u => String(username||'').toLowerCase() === u.toLowerCase()) && password === DEV_BYPASS_PASSWORD){
       const user = { id: 'u-admin', name: 'Admin', email: 'Admin@local', role: 'Admin' }
       setTeam(prev => { const exists = prev.find(p=>p.id===user.id); if(exists) return prev.map(p=>p.id===user.id?user:p); return [user, ...prev] })
       setIsAuthenticated(true)

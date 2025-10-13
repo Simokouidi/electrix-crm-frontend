@@ -169,6 +169,40 @@ export default function DashboardPage(){
     return teamForSelect.filter(isInSelectedMarket)
   }, [teamForSelect, clients, filterClient, isInSelectedMarket])
 
+  // Compute allowed market options for current user/admin
+  const marketOptions = React.useMemo(() => {
+    const t = String((currentUser as any)?.team || '').toLowerCase()
+    const opts: Array<{ value: 'saudi'|'dubai'; label: string }> = []
+    const add = (v: 'saudi'|'dubai') => {
+      if(!opts.find(o => o.value === v)) opts.push({ value: v, label: v === 'saudi' ? 'Saudi Team' : 'Dubai Team' })
+    }
+    if(isOwner){
+      // Owners have all markets
+      add('saudi'); add('dubai')
+    } else if(isAdmin){
+      if(t.includes('all market')){ add('saudi'); add('dubai') }
+      else if(t.includes('saudi')) add('saudi')
+      else if(t.includes('dubai')) add('dubai')
+    } else {
+      if(t.includes('saudi')) add('saudi')
+      if(t.includes('dubai')) add('dubai')
+    }
+    return opts
+  }, [currentUser, isOwner, isAdmin])
+
+  // Ensure selection is valid and auto-select if only one market is available
+  React.useEffect(() => {
+    const allowed = new Set(marketOptions.map(o => o.value))
+    if(marketOptions.length === 1){
+      const only = marketOptions[0].value
+      if(filterMarket !== only) setFilterMarket(only)
+      return
+    }
+    if(filterMarket && !allowed.has(filterMarket as any)){
+      setFilterMarket('')
+    }
+  }, [marketOptions, filterMarket])
+
   // Client options interdependence: restrict by selected owner (if any)
   const clientsForSelect = React.useMemo(() => {
     if(filterOwner){
@@ -580,9 +614,10 @@ export default function DashboardPage(){
               }}
               className="border rounded px-2 py-1 text-sm bg-white"
             >
-              <option value="">Market</option>
-              <option value="saudi">Saudi Team</option>
-              <option value="dubai">Dubai Team</option>
+              {marketOptions.length > 1 ? <option value="">Market</option> : null}
+              {marketOptions.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
             </select>
             <select
               value={filterOwner}
@@ -1016,14 +1051,14 @@ export default function DashboardPage(){
                     <GaugeCard
                       title={`Clients Added (30d)`}
                       score={ca.score}
-                      valueText={`6`}
+                      valueText={`${ca.added}/6`}
                       subtitle={`${ca.added} of 6 · Target mo · ${ca.score}%`}
                       compact
                     />
                     <GaugeCard
                       title={`Activity Recency`}
                       score={ar.score}
-                      valueText={`${Math.max(0, Math.min(30, ar.value30))}`}
+                      valueText={`${Math.max(0, Math.min(30, ar.value30))}/30`}
                       subtitle={`Engagement score: ${Math.max(0, Math.min(30, ar.value30))} of 30`}
                       compact
                     />
@@ -1037,14 +1072,14 @@ export default function DashboardPage(){
                     <GaugeCard
                       title={`Clients Added (30d)`}
                       score={caAvg.score}
-                      valueText={`6`}
+                      valueText={`${Math.round(caAvg.avgAdded)}/6`}
                       subtitle={`Team average · Score ${caAvg.score}%`}
                       compact
                     />
                     <GaugeCard
                       title={`Activity Recency`}
                       score={arAvg.score}
-                      valueText={`${Math.max(0, Math.min(30, arAvg.avgValue30))}`}
+                      valueText={`${Math.max(0, Math.min(30, arAvg.avgValue30))}/30`}
                       subtitle={`Avg last activity: ${arAvg.avgDays} days · Avg score (max 30)`}
                       compact
                     />

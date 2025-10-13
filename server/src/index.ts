@@ -1,4 +1,12 @@
 import express from 'express';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables (default .env then fallback to server/.env explicitly)
+dotenv.config();
+if(!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS){
+  try{ dotenv.config({ path: path.resolve(__dirname, '..', '.env') }); }catch{ /* noop */ }
+}
 import http from 'http';
 import { Server as IOServer } from 'socket.io';
 import cors from 'cors';
