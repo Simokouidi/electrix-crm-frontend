@@ -437,6 +437,38 @@ export default function usersRouter(io: IOServer) {
           passwordVerified = !!ok
         }catch{ passwordVerified = false }
       }
+      // Notify user by email about the update (corporate + personal email when available)
+      try{
+        const toEmailCorp = String(mapped?.email || '')
+        const toEmailPersonal = String((mapped as any)?.personalEmail || (updated as any)?.personal_email || '')
+        const toRecipients = [toEmailCorp, toEmailPersonal].filter(Boolean)
+        if(toRecipients.length){
+          const originHeader = ''
+          const origin = process.env.APP_ORIGIN || 'http://localhost:5175'
+          const subject = 'Your ELECTRIX CRM access has been updated'
+          let text = `Hello,\n\nYour ELECTRIX CRM account has been updated by an administrator.`
+          if(plaintextPassword){
+            text += `\n\nTemporary password: ${plaintextPassword}`
+          }
+          text += `\n\nIf you did not request this change, please contact your administrator.`
+          const esc = (s:string)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          const html = `
+            <div style="font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111827;">
+              <h2 style="margin:0 0 12px 0;font-size:18px;">${esc(subject)}</h2>
+              <p>Hello,</p>
+              <p>Your ELECTRIX CRM account has been updated by an administrator.</p>
+              ${plaintextPassword ? `<p><strong>Temporary password:</strong> ${esc(plaintextPassword)}</p>` : ''}
+              <p>If you did not request this change, please contact your administrator.</p>
+              <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;"/>
+              <p style="margin:2px 0;color:#6b7280;">This is an automated message from ELECTRIX CRM.</p>
+            </div>
+          `
+          // fire-and-forget
+          sendMail({ to: toRecipients, subject, text, html }).catch((e:any)=>{
+            console.warn('[Users][Email] Failed to send update notification:', e?.message || e)
+          })
+        }
+      }catch(_e){ /* ignore email errors */ }
       io.emit('users:updated', mapped)
       res.json({ data: mapped, meta: { passwordVerified } })
     }catch(err:any){
