@@ -3,6 +3,7 @@ import { Server as IOServer } from 'socket.io';
 import { getPool } from '../db';
 import { validatePayload } from '../schema';
 import bcrypt from 'bcryptjs';
+import { sendMail } from '../services/mailer';
 
 export default function usersRouter(io: IOServer) {
   const router = Router();
@@ -99,6 +100,7 @@ export default function usersRouter(io: IOServer) {
       'id','name','role','email',
       phoneCol ? `\`${phoneCol}\` AS phone` : 'NULL AS phone',
       teamCol ? `\`${teamCol}\` AS team` : 'NULL AS team',
+      hasCol('personal_email') ? '`personal_email`' : 'NULL AS personal_email',
       managerCol ? `\`${managerCol}\` AS manager_id` : 'NULL AS manager_id',
       hasCol('status') ? '`status`' : 'NULL AS status',
       hasCol('last_login') ? '`last_login`' : 'NULL AS last_login',
@@ -157,6 +159,7 @@ export default function usersRouter(io: IOServer) {
         'id','name','role','email',
         phoneCol ? `\`${phoneCol}\` AS phone` : 'NULL AS phone',
         teamCol ? `\`${teamCol}\` AS team` : 'NULL AS team',
+        hasCol('personal_email') ? '`personal_email`' : 'NULL AS personal_email',
         hasCol('status') ? '`status`' : 'NULL AS status',
         hasCol('last_login') ? '`last_login`' : 'NULL AS last_login',
         hasCol('created_at') ? '`created_at`' : 'NULL AS created_at',
@@ -286,6 +289,7 @@ export default function usersRouter(io: IOServer) {
         'id','name','role','email',
         phoneCol ? `\`${phoneCol}\` AS phone` : 'NULL AS phone',
         teamCol ? `\`${teamCol}\` AS team` : 'NULL AS team',
+        hasCol('personal_email') ? '`personal_email`' : 'NULL AS personal_email',
         hasCol('status') ? '`status`' : 'NULL AS status',
         hasCol('last_login') ? '`last_login`' : 'NULL AS last_login',
         hasCol('created_at') ? '`created_at`' : 'NULL AS created_at',
@@ -304,6 +308,40 @@ export default function usersRouter(io: IOServer) {
           passwordVerified = !!ok
         }catch{ passwordVerified = false }
       }
+      // Attempt to send credentials email (non-blocking)
+      try{
+        const toEmailCorp = String(mapped?.email || '')
+        const toEmailPersonal = String((mapped as any)?.personalEmail || (created as any)?.personal_email || '')
+        const toRecipients = [toEmailCorp, toEmailPersonal].filter(Boolean)
+        if(toRecipients.length && plaintextPassword){
+          const originHeader = (req.headers['origin'] as string) || ''
+          const refererHeader: string = (req.headers['referer'] as string) || ''
+          const refererOrigin = refererHeader ? (refererHeader.match(/^https?:\/\/[^/]+/)?.[0] || '') : ''
+          const origin = originHeader || refererOrigin || process.env.APP_ORIGIN || 'http://localhost:5175'
+          const changeUrl = `${origin}/change-password?email=${encodeURIComponent(toEmailCorp)}`
+          const subject = 'Your ELECTRIX CRM access has been set up'
+          const text = `Hello,\n\nYour ELECTRIX CRM access has been set up.\n\nEmail: ${toEmailCorp}\nTemporary password: ${plaintextPassword}\n\nPlease sign in and change your password here:\n${changeUrl}\n\nThank you,\nELECTRIX Admin`
+          const esc = (s:string)=> String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+          const html = `
+            <div style="font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111827;">
+              <h2 style="margin:0 0 12px 0;font-size:18px;">${esc(subject)}</h2>
+              <p>Hello,</p>
+              <p>Your ELECTRIX CRM access has been set up.</p>
+              <p><strong>Email:</strong> ${esc(toEmailCorp)}<br/>
+                 <strong>Temporary password:</strong> ${esc(plaintextPassword || '')}</p>
+              <p>Please sign in and change your password here:<br/>
+                 <a href="${esc(changeUrl)}" target="_blank" rel="noreferrer">${esc(changeUrl)}</a></p>
+              <p>Thank you,<br/>ELECTRIX Admin</p>
+              <hr style="border:none;border-top:1px solid #e5e7eb;margin:16px 0;"/>
+              <p style="margin:2px 0;color:#6b7280;">This is an automated message from ELECTRIX CRM.</p>
+            </div>
+          `
+          // fire-and-forget
+          sendMail({ to: toRecipients, subject, text, html }).catch((e:any)=>{
+            console.warn('[Users][Email] Failed to send credentials:', e?.message || e)
+          })
+        }
+      }catch(_e){ /* ignore email errors */ }
       io.emit('users:created', mapped)
       res.status(201).json({ data: mapped, meta: { passwordVerified } })
     }catch(err:any){
@@ -382,7 +420,12 @@ export default function usersRouter(io: IOServer) {
                  SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS 
                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'Phone'
                ) THEN Phone ELSE phone END AS phone,
-               team, status, last_login, created_at, updated_at, password
+               team,
+               CASE WHEN EXISTS(
+                 SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS 
+                 WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'personal_email'
+               ) THEN personal_email ELSE NULL END AS personal_email,
+               status, last_login, created_at, updated_at, password
         FROM users WHERE id = ?
       `, [id])
       const updated = (rows as any[])[0]

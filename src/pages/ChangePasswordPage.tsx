@@ -51,6 +51,14 @@ export default function ChangePasswordPage() {
   }
 
   useEffect(()=>{ requestAnimationFrame(()=>setMounted(true)) },[])
+  // Pre-fill email from query string if provided (e.g., /change-password?email=...)
+  useEffect(() => {
+    try{
+      const params = new URLSearchParams(window.location.search)
+      const e = params.get('email')
+      if(e) setEmail(e)
+    }catch{ /* ignore */ }
+  }, [])
   useEffect(() => {
     if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
     mountTsRef.current = Date.now()
@@ -89,10 +97,17 @@ export default function ChangePasswordPage() {
       const res = await fetch((API_BASE || '') + '/api/auth/change-password', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ email, currentPassword: current, newPassword: nextPw })
+        // Backend expects: { email, current, next }
+        body: JSON.stringify({ email, current, next: nextPw })
       })
       if (!res.ok) {
-        const msg = await res.text().catch(()=> 'Failed to change password.')
+        let msg = 'Failed to change password.'
+        try{
+          const data = await res.json()
+          msg = (data && (data.error || data.message)) || msg
+        }catch{
+          try{ msg = await res.text() }catch{ /* ignore */ }
+        }
         throw new Error(msg || 'Failed to change password.')
       }
       // telemetry: record successful password change (no sensitive details)

@@ -1,4 +1,12 @@
 import express from 'express';
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables (default .env then fallback to server/.env explicitly)
+dotenv.config();
+if(!process.env.SMTP_HOST || !process.env.SMTP_USER || !process.env.SMTP_PASS){
+  try{ dotenv.config({ path: path.resolve(__dirname, '..', '.env') }); }catch{ /* noop */ }
+}
 import http from 'http';
 import { Server as IOServer } from 'socket.io';
 import cors from 'cors';
@@ -11,6 +19,7 @@ import dbRouter from './routes/db';
 import botRouter from './routes/bot';
 import usageRouter from './routes/usage';
 import metricsRouter from './routes/metrics';
+import emailRouter from './routes/email';
 import { loadSchema } from './schema'
 import bcrypt from 'bcryptjs';
 
@@ -33,6 +42,7 @@ app.use('/api/db', dbRouter);
 app.use('/api/bot', botRouter());
 app.use('/api/usage', usageRouter);
 app.use('/api/metrics', metricsRouter);
+app.use('/api/email', emailRouter);
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 4000;
 
