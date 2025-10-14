@@ -58,15 +58,34 @@ export default function SettingsPage(){
     return 'Mon–Fri 09:00–17:00'
   }, [roleLower, teamLowerForUser])
 
-  // API base: prefer VITE_API_URL, else if running on 4000 use same-origin, otherwise default to local server
-  const apiBase = (import.meta as any)?.env?.VITE_API_URL || (window.location.port === '4000' ? '' : 'http://127.0.0.1:4000')
+  // API base discovery (match store.tsx behavior):
+  // 1) runtime override via localStorage 'API_BASE'
+  // 2) build-time VITE_API_BASE
+  // 3) when running on localhost, default to http://localhost:4000
+  let API_BASE = ''
+  try{
+    if(typeof window !== 'undefined'){
+      const ls = localStorage.getItem('API_BASE')
+      if(ls) API_BASE = ls
+    }
+  }catch{/* ignore storage errors */}
+  if(!API_BASE){
+    API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+  }
+  if(!API_BASE && typeof window !== 'undefined'){
+    const host = (window.location && window.location.hostname) || 'localhost'
+    if(host === 'localhost' || host === '127.0.0.1'){
+      API_BASE = 'http://localhost:4000'
+    }
+  }
+
   const apiFetch = (path: string, init?: RequestInit) => {
     const authHeaders: Record<string,string> = {
       'X-User-Id': String((currentUser as any)?.id || ''),
       'X-User-Email': String((currentUser as any)?.email || '')
     }
     const merged: RequestInit = { ...init, headers: { ...(init?.headers as any), ...authHeaders } }
-    return fetch(`${apiBase}${path}`, merged)
+    return fetch((API_BASE || '') + path, merged)
   }
   // usage session + timers
   const sessionIdRef = React.useRef<string>('')
@@ -84,12 +103,11 @@ export default function SettingsPage(){
   async function sendUsage(activity_type: string, activity_details?: any, time_spent_seconds?: number){
     try{
       if(!sessionIdRef.current) sessionIdRef.current = genSessionId()
-      let API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
-      if(!API_BASE && typeof window !== 'undefined'){
+      // reuse same API_BASE discovery logic as above
+      let apiBaseLocal = API_BASE || ''
+      if(!apiBaseLocal && typeof window !== 'undefined'){
         const host = (window.location && window.location.hostname) || 'localhost'
-        if(host === 'localhost' || host === '127.0.0.1'){
-          API_BASE = 'http://localhost:4000'
-        }
+        if(host === 'localhost' || host === '127.0.0.1') apiBaseLocal = 'http://localhost:4000'
       }
       const body: any = {
         user_id: String((currentUser as any)?.id || (currentUser as any)?.ID || 'unknown'),
@@ -103,7 +121,7 @@ export default function SettingsPage(){
       const uemail = String((currentUser as any)?.email || '')
       if(uid) hdrs['X-User-Id'] = uid
       if(uemail) hdrs['X-User-Email'] = uemail
-      await fetch((API_BASE || '') + '/api/usage', { method: 'POST', headers: hdrs, body: JSON.stringify(body) })
+      await fetch((apiBaseLocal || '') + '/api/usage', { method: 'POST', headers: hdrs, body: JSON.stringify(body) })
     }catch{ /* ignore */ }
   }
   React.useEffect(() => {
@@ -1251,8 +1269,21 @@ function AutomationTab({ isOwner, isAdmin }: { isOwner: boolean; isAdmin: boolea
   const [ready, setReady] = React.useState<boolean>(false)
   const [loading, setLoading] = React.useState<boolean>(false)
   const [error, setError] = React.useState<string | null>(null)
-  const viteEnv: any = (import.meta as any)?.env || {}
-  const apiBase = viteEnv.VITE_API_URL || (window.location.port === '4000' ? '' : 'http://127.0.0.1:4000')
+  // API base discovery: runtime localStorage override -> build-time VITE_API_BASE -> localhost fallback
+  let API_BASE = ''
+  try{
+    if(typeof window !== 'undefined'){
+      const ls = localStorage.getItem('API_BASE')
+      if(ls) API_BASE = ls
+    }
+  }catch{/* ignore */}
+  if(!API_BASE){
+    API_BASE = (import.meta as any).env?.VITE_API_BASE || ''
+  }
+  if(!API_BASE && typeof window !== 'undefined'){
+    const host = (window.location && window.location.hostname) || 'localhost'
+    if(host === 'localhost' || host === '127.0.0.1') API_BASE = 'http://localhost:4000'
+  }
 
   const canView = isOwner
   React.useEffect(()=>{
@@ -1263,7 +1294,7 @@ function AutomationTab({ isOwner, isAdmin }: { isOwner: boolean; isAdmin: boolea
     setLoading(true)
     setError(null)
     try{
-      const r = await fetch(`${apiBase}/api/bot/qr`)
+  const r = await fetch((API_BASE || '') + '/api/bot/qr')
       if(!r.ok){
         const txt = await r.text().catch(()=>`${r.status}`)
         throw new Error(txt)
